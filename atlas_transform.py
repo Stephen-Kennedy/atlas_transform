@@ -3,7 +3,14 @@ import sys
 import re
 from dataclasses import dataclass
 from datetime import datetime, date
+from pathlib import Path
 from typing import List, Optional, Tuple
+
+# External helpers you already added
+# - atlas_io.py: parse_execution_today, read_daily_note, read_file
+# - atlas_paths.py: get_paths() that returns .scratchpad and .daily_notes_dir
+from atlas_io import parse_execution_today, read_daily_note, read_file
+from atlas_paths import get_paths
 
 # =========================
 # Helpers: time + parsing
@@ -26,18 +33,6 @@ def min_to_hhmm(m: int) -> str:
     mm = m % 60
     return f"{h:02d}{mm:02d}"
 
-def parse_execution_today_iso(text: str) -> Optional[date]:
-    # Expect: Executing /focus for Friday, December 19, 2025
-    m = re.search(r"Executing\s+/focus\s+for\s+[A-Za-z]+,\s+([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})", text)
-    if not m:
-        return None
-    month_name, day_s, year_s = m.group(1), m.group(2), m.group(3)
-    try:
-        dt = datetime.strptime(f"{month_name} {day_s} {year_s}", "%B %d %Y").date()
-        return dt
-    except ValueError:
-        return None
-
 def parse_iso_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
@@ -45,15 +40,11 @@ def strip_checkbox_prefix(raw: str) -> str:
     return re.sub(r"^\s*-\s*\[\s*[xX]?\s*\]\s*", "", raw).strip()
 
 def clean_tail_noise(s: str) -> str:
-    # remove the "and received nothing back" artifact
     s = s.replace("and received nothing back", "").strip()
-    # collapse whitespace
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
 def strip_known_tags(s: str) -> str:
-    # Keep #quickcap and #todo in text if you want; remove #deep after detecting it (cleaner output)
-    # We will remove only #deep tokens (case-insensitive)
     s = re.sub(r"(?i)\B#deep\b", "", s)
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
@@ -82,7 +73,7 @@ class Task:
     text: str
     due: date
     overdue_days: int
-    is_deep: bool = False  # #deep flag
+    is_deep: bool = False
 
 @dataclass
 class FunnelItem:
@@ -95,8 +86,8 @@ class Block:
     start_min: int
     end_min: int
     kind: str
-    capacity_units: int = 0          # for 15m packing blocks
-    max_tasks: int = 0               # for deep work
+    capacity_units: int = 0
+    max_tasks: int = 0
     notes: str = ""
 
     @property
@@ -104,7 +95,7 @@ class Block:
         return max(0, self.end_min - self.start_min)
 
 # =========================
-# Extract meetings/tasks/funnel from RAW input
+# Extract meetings/tasks/funnel from input
 # =========================
 
 MEET_LINE_RE = re.compile(r"^\s*-\s*([0-9:]{3,5})\s*-\s*([0-9:]{3,5})\s*(?:MEET\s*)?\[\[(.*?)\]\]\s*$")
@@ -126,14 +117,11 @@ def extract_meetings(raw: str) -> List[Meeting]:
             try:
                 sm = hhmm_to_min(st)
                 em = hhmm_to_min(en)
-                title = inner.strip()
-                meetings.append(Meeting(sm, em, title))
+                meetings.append(Meeting(sm, em, inner.strip()))
             except ValueError:
                 continue
             continue
 
-        # Handle non-[[...]] appointment lines like:
-        # - 14:45 - 14:45 Gmail Medical Appointment ...
         m2 = GEN_APPT_RE.match(line)
         if m2 and "[[" not in line:
             st, en, title = m2.group(1), m2.group(2), m2.group(3)
@@ -163,20 +151,17 @@ def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
         m = TASK_INCOMPLETE_RE.match(line)
         if not m:
             continue
-        if "#quickcap" in line.lower():
-            continue  # funnel items are not tasks
 
         active_count += 1
 
         text_raw = strip_checkbox_prefix(line)
         text_raw = clean_tail_noise(text_raw)
 
-        # Detect #deep before stripping it
         is_deep = bool(re.search(r"(?i)\B#deep\b", text_raw))
 
         dm = DUE_RE.search(line)
         if not dm:
-            continue  # no due date => not tiered, but still counts in active_count
+            continue  # counts in active_count, but not tiered
 
         try:
             due = parse_iso_date(dm.group(1))
@@ -185,9 +170,7 @@ def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
 
         overdue_days = (today - due).days
 
-        # Remove due token from displayed text
         text = re.sub(r"\s*📅\s*\d{4}-\d{2}-\d{2}\s*", "", text_raw).strip()
-        # Remove #deep from display (optional, but cleaner)
         text = strip_known_tags(text)
         text = re.sub(r"\s{2,}", " ", text).strip()
 
@@ -319,7 +302,6 @@ def choose_slot(windows: List[FreeWindow], minutes_needed: int, prefer: str) -> 
     if prefer == "latest":
         w = max(candidates, key=lambda x: (x.end_min, x.minutes))
         return (w.end_min - minutes_needed, w.end_min)
-    # earliest default
     w = min(candidates, key=lambda x: (x.start_min, x.minutes))
     return (w.start_min, w.start_min + minutes_needed)
 
@@ -350,7 +332,7 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
         blocks.append(Block(st, en, kind="ADMIN_PM", capacity_units=4))
         remaining = subtract_interval(remaining, st, en)
 
-    # Social blocks only if at least one >=60 window exists in ORIGINAL free windows
+    # Social blocks only if at least one >=60 free window existed initially
     has_60 = any(w.minutes >= 60 for w in free_windows)
     if has_60:
         slot = choose_slot(remaining, 30, prefer="earliest")
@@ -392,8 +374,6 @@ def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
             crit.append(t)
         elif (1 <= od <= 2) or (-3 <= od <= -1):
             std.append(t)
-        else:
-            pass
 
     imm.sort(key=lambda x: (-x.overdue_days, x.due))
     crit.sort(key=lambda x: (-x.overdue_days, x.due))
@@ -420,33 +400,66 @@ def age_label(ad: int) -> str:
     return "Captured today"
 
 # =========================
+# Daily Note preservation (ATLAS block replace)
+# =========================
+
+ATLAS_START = "<!-- ATLAS:START -->"
+ATLAS_END = "<!-- ATLAS:END -->"
+
+def upsert_atlas_block(existing: str, atlas_block: str) -> str:
+    if ATLAS_START in existing and ATLAS_END in existing:
+        before = existing.split(ATLAS_START)[0]
+        after = existing.split(ATLAS_END)[1]
+        return (
+            before
+            + ATLAS_START
+            + "\n\n"
+            + atlas_block.rstrip()
+            + "\n\n"
+            + ATLAS_END
+            + after
+        )
+
+    # If markers missing, append (safe fallback)
+    existing_trim = existing.rstrip()
+    if existing_trim:
+        existing_trim += "\n\n"
+    return (
+        existing_trim
+        + ATLAS_START
+        + "\n\n"
+        + atlas_block.rstrip()
+        + "\n\n"
+        + ATLAS_END
+        + "\n"
+    )
+
+# =========================
 # Main
 # =========================
 
 def main():
-    from atlas_paths import get_paths
-    from atlas_io import parse_execution_today, read_daily_note, read_file
-
     paths = get_paths()
 
+    # Non-blocking stdin read (prevents "stuck" terminal runs)
     stdin_text = ""
-    if not sys.stdin.isatty():  # only read stdin when something is being piped in
+    if not sys.stdin.isatty():
         stdin_text = sys.stdin.read()
 
-    # 1) Determine TODAY from the execution header if present, else system date
+    # TODAY from execution header if present; otherwise system date
     today = parse_execution_today(stdin_text) or datetime.now().date()
 
-    # 2) Pull content directly from Obsidian
+    # Pull directly from vault
     daily_note_text = read_daily_note(paths.daily_notes_dir, today)
     scratchpad_text = read_file(paths.scratchpad)
 
-    # 3) Build the combined in-memory input used by the rest of your script
+    # Combine in memory for parsing (keeps your existing parsers)
     raw = (
-            stdin_text.strip() + "\n\n"
-            + "### DAILY_NOTE\n"
-            + daily_note_text.strip() + "\n\n"
-            + "### SCRATCHPAD\n"
-            + scratchpad_text.strip() + "\n"
+        stdin_text.strip() + "\n\n"
+        + "### DAILY_NOTE\n"
+        + daily_note_text.strip() + "\n\n"
+        + "### SCRATCHPAD\n"
+        + scratchpad_text.strip() + "\n"
     )
 
     meetings = clamp_meetings_to_day(extract_meetings(raw))
@@ -462,111 +475,93 @@ def main():
     req_blocks, remaining = place_required_blocks(free_windows)
     quick_blocks = make_quick_wins_blocks(remaining)
 
-    print("SCHEDULE_BUNDLE v1")
-    print(f"TODAY_ISO: {today.isoformat()}")
-    print()
-
-    print("MEETINGS (normalized):")
+    # Build the ATLAS block content (this is what gets inserted between markers)
+    lines: List[str] = []
+    lines.append(f"## ATLAS Focus Plan ({today.isoformat()})")
+    lines.append("")
+    lines.append("### Time Blocking")
     if not meetings:
-        print("- (none)")
+        lines.append("No meetings scheduled")
     else:
         for m in meetings:
-            print(f"- {min_to_hhmm(m.start_min)}-{min_to_hhmm(m.end_min)} | {m.title}")
-    print()
+            lines.append(f"- {min_to_hhmm(m.start_min)} - {min_to_hhmm(m.end_min)} MEET [[{m.title}]]")
 
-    print("FREE_WINDOWS (8-5 with lunch blocked):")
-    if not free_windows:
-        print("- (none)")
-    else:
+    lines.append("")
+    lines.append("### Focus")
+    lines.append("")
+    lines.append("**🎯 TASK PRIORITIES:**")
+
+    def emit_task_section(title: str, ts: List[Task]):
+        if not ts:
+            return
+        lines.append("")
+        lines.append(f"**{title}:**")
+        for t in ts:
+            lines.append(f"- {t.text} [[Scratchpad]] – {overdue_label(t.overdue_days)}")
+
+    emit_task_section("IMMEDIATE (Overdue >7 days OR Due Today)", imm)
+    emit_task_section("CRITICAL (Overdue 3–7 days)", crit)
+    emit_task_section("STANDARD (Overdue 1–2 days OR Due within 3 days)", std)
+
+    lines.append("")
+    lines.append(f"**Active task count:** {active_count}")
+
+    lines.append("")
+    lines.append("**📥 FUNNEL:**")
+
+    if funnel_immediate:
+        lines.append("")
+        lines.append("**Items needing immediate processing (>7 days old):**")
+        for it in funnel_immediate:
+            lines.append(f"- {it.item_date.isoformat()}: {it.text} [[Scratchpad]] – {age_label(it.age_days)}")
+
+    if funnel_recent:
+        lines.append("")
+        lines.append("**Recent items (≤7 days old):**")
+        for it in funnel_recent:
+            lines.append(f"- {it.item_date.isoformat()}: {it.text} [[Scratchpad]] – {age_label(it.age_days)}")
+
+    lines.append("")
+    lines.append(f"**Funnel count:** {len(funnel_items)} total, {len(funnel_immediate)} items >7 days old")
+
+    # Windows + blocks (optional but useful)
+    if free_windows:
+        lines.append("")
+        lines.append("**🕒 FREE WINDOWS (8–5 with lunch blocked):**")
         for w in free_windows:
-            print(f"- {min_to_hhmm(w.start_min)}-{min_to_hhmm(w.end_min)} | minutes: {w.minutes}")
-    print()
+            lines.append(f"- {min_to_hhmm(w.start_min)} - {min_to_hhmm(w.end_min)} ({w.minutes} min)")
 
-    print("REQUIRED_BLOCKS (pre-placed):")
-    if not req_blocks:
-        print("- (none)")
-    else:
+    if req_blocks:
+        lines.append("")
+        lines.append("**🧱 PRE-PLACED BLOCKS:**")
         for b in req_blocks:
             if b.kind == "DEEP_WORK":
-                print(f"- {min_to_hhmm(b.start_min)}-{min_to_hhmm(b.end_min)} | DEEP_WORK | max_tasks: 1")
-            else:
-                print(f"- {min_to_hhmm(b.start_min)}-{min_to_hhmm(b.end_min)} | {b.kind} | capacity_units: {b.capacity_units}")
-    print()
+                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: Deep Work (max 1 task)")
+            elif b.kind == "ADMIN_AM":
+                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: Admin AM (email/ops)")
+            elif b.kind == "ADMIN_PM":
+                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: Admin PM (wrap-up)")
+            elif b.kind == "SOCIAL_POST":
+                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: Social (post + engage)")
+            elif b.kind == "SOCIAL_REPLIES":
+                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: Social (commenting + replies)")
 
-    print("QUICK_WINS_BLOCKS (15-min units):")
-    if not quick_blocks:
-        print("- (none)")
-    else:
+    if quick_blocks:
+        lines.append("")
+        lines.append("**⚡ QUICK WINS CAPACITY (15-min units):**")
         for b in quick_blocks:
-            print(f"- {min_to_hhmm(b.start_min)}-{min_to_hhmm(b.end_min)} | capacity_units: {b.capacity_units}")
-    print()
+            lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {b.capacity_units} units")
 
-    # Separate listing of deep candidates (useful for Ollama enforcement)
-    deep_candidates = [t for t in tasks if t.is_deep]
+    atlas_block = "\n".join(lines).rstrip() + "\n"
 
-    print("TASKS_TIERED:")
-    print(f"ACTIVE_TASK_COUNT: {active_count}")
-    print(f"DEEP_CANDIDATE_COUNT: {len(deep_candidates)}")
-    print("DEEP_CANDIDATES:")
-    if not deep_candidates:
-        print("- (none)")
-    else:
-        # Prioritize by tier and overdue severity
-        # We'll sort deep candidates by most overdue first, then due date
-        deep_candidates.sort(key=lambda x: (-x.overdue_days, x.due))
-        for t in deep_candidates:
-            print(f"- {t.text} | due: {t.due.isoformat()} | overdue_days: {t.overdue_days} | label: {overdue_label(t.overdue_days)} | deep_candidate: true")
+    # Write into today's daily note while preserving template/dataview content
+    daily_note_path = Path(paths.daily_notes_dir) / f"{today.isoformat()}.md"
+    existing = daily_note_path.read_text(encoding="utf-8") if daily_note_path.exists() else ""
+    new_text = upsert_atlas_block(existing, atlas_block)
+    daily_note_path.write_text(new_text, encoding="utf-8")
 
-    print("IMMEDIATE:")
-    if not imm:
-        print("- (none)")
-    else:
-        for t in imm:
-            deep_flag = "true" if t.is_deep else "false"
-            print(f"- {t.text} | due: {t.due.isoformat()} | overdue_days: {t.overdue_days} | label: {overdue_label(t.overdue_days)} | deep_candidate: {deep_flag}")
-
-    print("CRITICAL:")
-    if not crit:
-        print("- (none)")
-    else:
-        for t in crit:
-            deep_flag = "true" if t.is_deep else "false"
-            print(f"- {t.text} | due: {t.due.isoformat()} | overdue_days: {t.overdue_days} | label: {overdue_label(t.overdue_days)} | deep_candidate: {deep_flag}")
-
-    print("STANDARD:")
-    if not std:
-        print("- (none)")
-    else:
-        for t in std:
-            deep_flag = "true" if t.is_deep else "false"
-            print(f"- {t.text} | due: {t.due.isoformat()} | overdue_days: {t.overdue_days} | label: {overdue_label(t.overdue_days)} | deep_candidate: {deep_flag}")
-    print()
-
-    print("FUNNEL_TIERED:")
-    total_funnel = len(funnel_items)
-    gt7 = len(funnel_immediate)
-    print(f"FUNNEL_COUNT: {total_funnel} total, {gt7} items >7 days old")
-    print("IMMEDIATE_PROCESSING (>7 days old):")
-    if not funnel_immediate:
-        print("- (none)")
-    else:
-        for it in funnel_immediate:
-            print(f"- {it.item_date.isoformat()} | {it.text} | age_days: {it.age_days} | label: {age_label(it.age_days)}")
-    print("RECENT (<=7 days old):")
-    if not funnel_recent:
-        print("- (none)")
-    else:
-        for it in funnel_recent:
-            print(f"- {it.item_date.isoformat()} | {it.text} | age_days: {it.age_days} | label: {age_label(it.age_days)}")
-    print()
-
-    print("SUMMARY:")
-    print(f"MEETING_COUNT: {len(meetings)}")
-    if free_windows:
-        largest = max(free_windows, key=lambda w: w.minutes)
-        print(f"LARGEST_FREE_WINDOW: {min_to_hhmm(largest.start_min)}-{min_to_hhmm(largest.end_min)} ({largest.minutes} min)")
-    else:
-        print("LARGEST_FREE_WINDOW: (none)")
+    # Also print for Alfred/terminal visibility
+    print(atlas_block)
 
 if __name__ == "__main__":
     main()
