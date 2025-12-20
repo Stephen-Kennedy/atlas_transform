@@ -38,15 +38,6 @@ def parse_execution_today_iso(text: str) -> Optional[date]:
     except ValueError:
         return None
 
-def find_first_iso_date(text: str) -> Optional[date]:
-    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
-    if not m:
-        return None
-    try:
-        return datetime.strptime(m.group(1), "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
 def parse_iso_date(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
@@ -172,6 +163,8 @@ def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
         m = TASK_INCOMPLETE_RE.match(line)
         if not m:
             continue
+        if "#quickcap" in line.lower():
+            continue  # funnel items are not tasks
 
         active_count += 1
 
@@ -435,7 +428,18 @@ def main():
     if not raw.strip():
         return
 
-    today = parse_execution_today_iso(raw) or find_first_iso_date(raw)
+    today = parse_execution_today_iso(raw)
+
+    # Optional explicit override lines (recommended)
+    if not today:
+        m = re.search(r"(?im)^\s*(?:TODAY|DATE)\s*:\s*(\d{4}-\d{2}-\d{2})\s*$", raw)
+        if m:
+            try:
+                today = parse_iso_date(m.group(1))
+            except ValueError:
+                today = None
+
+    # Final fallback: system date (SAFE)
     if not today:
         today = datetime.now().date()
 
