@@ -1,43 +1,49 @@
 #!/usr/bin/env python3
-"""
-ATLAS Transform v2.0
-====================
-Processes Obsidian daily notes and scratchpad to generate structured ATLAS blocks.
-Python handles all data extraction, time math, and structure generation.
-Output is designed to be consumed by Ollama for AI-assisted task placement.
+"""ATLAS Transform v2.2
+======================
 
-Author: Stephen Kennedy
+Generates a structured ATLAS block in an Obsidian daily note.
+
+Core behavior:
+- Meetings are extracted ONLY from the Daily Note "### Time Blocking" section.
+- Tasks and funnel items are extracted from (Daily Note + Scratchpad).
+- Workday is 08:00–17:00 with lunch 12:00–13:00.
+
+Optional JSON workflow (recommended):
+- --export-fill-json writes a JSON "fill request" describing every placeholder slot
+  plus the list of candidate tasks.
+- --apply-fill-json applies a JSON "fill plan" back into the ATLAS block with
+  strict validation (no duplicates, deep work requires #deep, tasks must exist).
+
+Author: Stephen Kennedy (with revisions)
 """
 
-import re
+from __future__ import annotations
+
 import argparse
+import json
+import re
+import subprocess
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # =========================
 # Constants
 # =========================
 
-# Default duration when an appointment has identical start/end time
 DEFAULT_APPT_MINUTES = 15
-
-
-# Work hours will be calculated after hhmm_to_min is defined
-# (see below after function definitions)
 
 # =========================
 # File IO
 # =========================
 
 def read_text(p: Path) -> str:
-    """Read text file with UTF-8 encoding."""
     return p.read_text(encoding="utf-8", errors="replace")
 
 
 def write_text(p: Path, text: str) -> None:
-    """Write text file with UTF-8 encoding."""
     p.write_text(text, encoding="utf-8")
 
 
@@ -46,13 +52,13 @@ def write_text(p: Path, text: str) -> None:
 # =========================
 
 def hhmm_to_min(s: str) -> int:
-    """
-    Convert time string to minutes since midnight.
-    Handles: "0900", "09:00", "900"
+    """Convert time string to minutes since midnight.
+
+    Accepts: "0900", "09:00", "900".
     """
     s = s.strip()
     if ":" in s:
-        h, m = s.split(":")
+        h, m = s.split(":", 1)
         return int(h) * 60 + int(m)
     s = re.sub(r"\D", "", s)
     if len(s) == 3:
@@ -63,45 +69,37 @@ def hhmm_to_min(s: str) -> int:
 
 
 def min_to_hhmm(m: int) -> str:
-    """Convert minutes since midnight to HHMM format."""
     h = m // 60
     mm = m % 60
     return f"{h:02d}{mm:02d}"
 
 
 def parse_iso_date(s: str) -> date:
-    """Parse YYYY-MM-DD format date."""
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
 def strip_checkbox_prefix(raw: str) -> str:
-    """Remove Obsidian checkbox prefix from task line."""
     return re.sub(r"^\s*-\s*\[\s*[xX]?\s*\]\s*", "", raw).strip()
 
 
 def clean_tail_noise(s: str) -> str:
-    """Remove common noise patterns from task text."""
     s = s.replace("and received nothing back", "").strip()
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
 
 def preserve_display_text(s: str) -> str:
-    """Clean task text while preserving important formatting."""
     s = clean_tail_noise(s)
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
 
 # =========================
-# Time constants (defined after hhmm_to_min is available)
+# Time constants
 # =========================
 
-# Work hours (8 AM - 5 PM)
 WORK_START = hhmm_to_min("0800")
 WORK_END = hhmm_to_min("1700")
-
-# Lunch block (12 PM - 1 PM)
 LUNCH_START = hhmm_to_min("1200")
 LUNCH_END = hhmm_to_min("1300")
 
@@ -112,7 +110,6 @@ LUNCH_END = hhmm_to_min("1300")
 
 @dataclass
 class Meeting:
-    """Represents a scheduled meeting."""
     start_min: int
     end_min: int
     title: str
@@ -120,7 +117,6 @@ class Meeting:
 
 @dataclass
 class FreeWindow:
-    """Represents an available time window."""
     start_min: int
     end_min: int
 
@@ -131,7 +127,6 @@ class FreeWindow:
 
 @dataclass
 class Task:
-    """Represents a task with due date and metadata."""
     display: str
     due: date
     overdue_days: int
@@ -140,7 +135,6 @@ class Task:
 
 @dataclass
 class FunnelItem:
-    """Represents a funnel/quick capture item."""
     display: str
     item_date: date
     age_days: int
@@ -148,61 +142,44 @@ class FunnelItem:
 
 @dataclass
 class Block:
-    """Represents a pre-placed time block in the schedule."""
     start_min: int
     end_min: int
     kind: str
     capacity_units: int = 0
-    max_tasks: int = 1  # Default to 1 placeholder per block
+    max_tasks: int = 1
 
     @property
     def minutes(self) -> int:
         return max(0, self.end_min - self.start_min)
 
     def placeholder_count(self) -> int:
-        """Calculate number of task placeholders this block should have."""
         if self.kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
-            return 0  # Social blocks have no task placeholders
+            return 0
         if self.kind == "DEEP_WORK":
-            return 1  # Deep work always gets exactly 1 placeholder
-        return max(1, self.max_tasks)  # Other blocks: use max_tasks, minimum 1
+            return 1
+        return max(1, self.max_tasks)
 
 
 # =========================
 # Extract: meetings (Daily Note only, Time Blocking section only)
 # =========================
 
-# Matches various time block formats:
-# - 0900 - 1000 MEET [[Title]]
-# - 09:00 - 10:00 [[Title]]
-# - 11:00 - 14:00 Gmail Wolfpack party
 TIMEBLOCK_LINE_RE = re.compile(
     r"""^\s*-\s*
         (?P<st>[0-9:]{3,5})\s*-\s*(?P<en>[0-9:]{3,5})
         \s*(?:(?:MEET)\s*)?
-        (?:
-            \[\[(?P<bracket>.*?)\]\]
-            |
-            (?P<title>.+)
-        )\s*$
+        (?:\[\[(?P<bracket>.*?)\]\]|(?P<title>.+))\s*$
     """,
-    re.VERBOSE
+    re.VERBOSE,
 )
 
-# Extract Time Blocking section from daily note (case-insensitive)
 TIMEBLOCK_SECTION_RE = re.compile(
     r"(?ims)^\s*###\s+Time\s+Blocking\s*$\n(.*?)(?=^\s*###\s+|\Z)"
 )
 
 
 def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
-    """
-    Extract meetings from the Time Blocking section of daily note.
-    Only processes lines within ### Time Blocking section.
-    """
     meetings: List[Meeting] = []
-
-    # Find Time Blocking section
     msec = TIMEBLOCK_SECTION_RE.search(daily_text)
     if not msec:
         return meetings
@@ -212,31 +189,23 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
         line = line.rstrip()
         if not line.strip():
             continue
-
         m = TIMEBLOCK_LINE_RE.match(line)
         if not m:
             continue
-
         st = m.group("st")
         en = m.group("en")
         title = (m.group("bracket") or m.group("title") or "").strip()
         if not title:
             continue
-
         try:
             sm = hhmm_to_min(st)
             em = hhmm_to_min(en)
         except ValueError:
             continue
-
-        # If start == end, assume default duration
         if em == sm:
             em = sm + DEFAULT_APPT_MINUTES
-
-        # Normalize reversed times
         if em < sm:
             sm, em = em, sm
-
         meetings.append(Meeting(sm, em, title))
 
     meetings.sort(key=lambda x: (x.start_min, x.end_min, x.title))
@@ -244,7 +213,7 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
 
 
 # =========================
-# Extract: tasks + funnel (Scratchpad + Daily OK)
+# Extract: tasks + funnel (Scratchpad + Daily)
 # =========================
 
 TASK_INCOMPLETE_RE = re.compile(r"^\s*-\s*\[\s*\]\s+(.+)$")
@@ -253,19 +222,12 @@ DUE_RE = re.compile(r"📅\s*(\d{4}-\d{2}-\d{2})")
 
 
 def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
-    """
-    Extract incomplete tasks with due dates.
-    Returns: (list of tasks, total active task count)
-    """
     tasks: List[Task] = []
     active_count = 0
 
     for line in raw.splitlines():
-        # Skip completed tasks
         if TASK_COMPLETE_RE.match(line):
             continue
-
-        # Must be incomplete task
         if not TASK_INCOMPLETE_RE.match(line):
             continue
 
@@ -273,16 +235,13 @@ def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
         display_raw = preserve_display_text(strip_checkbox_prefix(line))
         is_deep = bool(re.search(r"(?i)\B#deep\b", display_raw))
 
-        # Only include tasks with due dates in the priority list
         dm = DUE_RE.search(line)
         if not dm:
             continue
-
         try:
             due = parse_iso_date(dm.group(1))
         except ValueError:
             continue
-
         overdue_days = (today - due).days
         tasks.append(Task(display=display_raw, due=due, overdue_days=overdue_days, is_deep=is_deep))
 
@@ -290,10 +249,6 @@ def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
 
 
 def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
-    """
-    Extract funnel items (quick captures).
-    Looks for items with #quickcap tag or in a # Funnel section.
-    """
     items: List[FunnelItem] = []
     in_funnel_section = False
 
@@ -302,42 +257,32 @@ def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
         if not s:
             continue
 
-        # Track if we're in a Funnel section
         if re.match(r"^#\s+Funnel\b", s, flags=re.IGNORECASE):
             in_funnel_section = True
             continue
         if in_funnel_section and s.startswith("#") and not re.match(r"^#\s+Funnel\b", s, flags=re.IGNORECASE):
             in_funnel_section = False
 
-        # Check if this line is a funnel candidate
         is_candidate = ("#quickcap" in s) or in_funnel_section
         if not is_candidate:
             continue
 
-        # Skip completed items
         if TASK_COMPLETE_RE.match(s):
             continue
-
-        # Must be incomplete task
         if not re.match(r"^\s*-\s*\[\s*\]\s+", line):
             continue
 
         clean = preserve_display_text(strip_checkbox_prefix(line))
-
-        # Extract date from item text
         iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", clean)
         if not iso:
             continue
-
         try:
             item_date = parse_iso_date(iso.group(1))
         except ValueError:
             continue
-
         age_days = (today - item_date).days
         items.append(FunnelItem(display=clean, item_date=item_date, age_days=age_days))
 
-    # Deduplicate by (date, display)
     seen = set()
     uniq: List[FunnelItem] = []
     for it in items:
@@ -352,11 +297,10 @@ def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
 
 
 # =========================
-# Build schedule (8-5, lunch 12-1)
+# Build schedule
 # =========================
 
 def clamp_meetings_to_day(meetings: List[Meeting]) -> List[Meeting]:
-    """Clamp meeting times to work hours (8 AM - 5 PM)."""
     clamped: List[Meeting] = []
     for m in meetings:
         sm = max(WORK_START, m.start_min)
@@ -368,15 +312,10 @@ def clamp_meetings_to_day(meetings: List[Meeting]) -> List[Meeting]:
 
 
 def build_busy_windows(meetings: List[Meeting]) -> List[FreeWindow]:
-    """
-    Build list of busy windows from meetings, including lunch.
-    Merges overlapping windows.
-    """
     busy: List[FreeWindow] = [FreeWindow(m.start_min, m.end_min) for m in meetings]
     busy.append(FreeWindow(LUNCH_START, LUNCH_END))
     busy.sort(key=lambda w: (w.start_min, w.end_min))
 
-    # Merge overlapping windows
     merged: List[FreeWindow] = []
     for b in busy:
         if not merged:
@@ -391,7 +330,6 @@ def build_busy_windows(meetings: List[Meeting]) -> List[FreeWindow]:
 
 
 def invert_busy_to_free(merged_busy: List[FreeWindow]) -> List[FreeWindow]:
-    """Convert busy windows into free windows within work hours."""
     free: List[FreeWindow] = []
     cursor = WORK_START
     for b in merged_busy:
@@ -404,14 +342,11 @@ def invert_busy_to_free(merged_busy: List[FreeWindow]) -> List[FreeWindow]:
 
 
 def subtract_interval(windows: List[FreeWindow], start: int, end: int) -> List[FreeWindow]:
-    """Remove a time interval from a list of windows."""
     out: List[FreeWindow] = []
     for w in windows:
-        # No overlap
         if end <= w.start_min or start >= w.end_min:
             out.append(w)
             continue
-        # Split window if interval is in the middle
         if start > w.start_min:
             out.append(FreeWindow(w.start_min, start))
         if end < w.end_min:
@@ -420,43 +355,23 @@ def subtract_interval(windows: List[FreeWindow], start: int, end: int) -> List[F
 
 
 def choose_slot(windows: List[FreeWindow], minutes_needed: int, prefer: str) -> Optional[Tuple[int, int]]:
-    """
-    Choose a time slot from available windows.
-
-    Args:
-        windows: Available free windows
-        minutes_needed: Duration required
-        prefer: "largest", "latest", or "earliest"
-
-    Returns:
-        (start_min, end_min) tuple or None if no suitable slot
-    """
     candidates = [w for w in windows if w.minutes >= minutes_needed]
     if not candidates:
         return None
-
     if prefer == "largest":
         w = max(candidates, key=lambda x: (x.minutes, -x.start_min))
         return (w.start_min, w.start_min + minutes_needed)
     if prefer == "latest":
         w = max(candidates, key=lambda x: (x.end_min, x.minutes))
         return (w.end_min - minutes_needed, w.end_min)
-    # prefer == "earliest"
     w = min(candidates, key=lambda x: (x.start_min, x.minutes))
     return (w.start_min, w.start_min + minutes_needed)
 
 
 def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], List[FreeWindow]]:
-    """
-    Place required time blocks (Deep Work, Admin, Social) into free windows.
-
-    Returns:
-        (list of placed blocks, remaining free windows)
-    """
     blocks: List[Block] = []
     remaining = list(free_windows)
 
-    # Deep Work: try 120 -> 90 -> 60 minutes (largest window)
     for mins in (120, 90, 60):
         slot = choose_slot(remaining, mins, prefer="largest")
         if slot:
@@ -465,31 +380,25 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
             remaining = subtract_interval(remaining, st, en)
             break
 
-    # Admin AM: 60 minutes (earliest available)
     slot = choose_slot(remaining, 60, prefer="earliest")
     if slot:
         st, en = slot
         blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=3))
         remaining = subtract_interval(remaining, st, en)
 
-    # Admin PM: 60 minutes (latest available)
     slot = choose_slot(remaining, 60, prefer="latest")
     if slot:
         st, en = slot
         blocks.append(Block(st, en, kind="ADMIN_PM", max_tasks=3))
         remaining = subtract_interval(remaining, st, en)
 
-    # Social blocks: only if at least one >=60 minute window exists in original free windows
     has_60 = any(w.minutes >= 60 for w in free_windows)
     if has_60:
-        # Social Post: 30 minutes (earliest)
         slot = choose_slot(remaining, 30, prefer="earliest")
         if slot:
             st, en = slot
             blocks.append(Block(st, en, kind="SOCIAL_POST"))
             remaining = subtract_interval(remaining, st, en)
-
-        # Social Replies: 30 minutes (latest)
         slot = choose_slot(remaining, 30, prefer="latest")
         if slot:
             st, en = slot
@@ -502,7 +411,6 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
 
 
 def make_quick_wins_blocks(remaining: List[FreeWindow]) -> List[Block]:
-    """Convert remaining free windows into Quick Wins blocks (15-min units)."""
     q: List[Block] = []
     for w in remaining:
         units = w.minutes // 15
@@ -517,13 +425,9 @@ def make_quick_wins_blocks(remaining: List[FreeWindow]) -> List[Block]:
 # =========================
 
 def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
-    """
-    Sort tasks into priority tiers:
-    - IMMEDIATE: >7 days overdue OR due today
-    - CRITICAL: 3-7 days overdue
-    - STANDARD: 1-2 days overdue OR due within 3 days
-    """
-    imm, crit, std = [], [], []
+    imm: List[Task] = []
+    crit: List[Task] = []
+    std: List[Task] = []
     for t in tasks:
         od = t.overdue_days
         if od > 7 or od == 0:
@@ -532,7 +436,6 @@ def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
             crit.append(t)
         elif (1 <= od <= 2) or (-3 <= od <= -1):
             std.append(t)
-
     imm.sort(key=lambda x: (-x.overdue_days, x.due))
     crit.sort(key=lambda x: (-x.overdue_days, x.due))
     std.sort(key=lambda x: (abs(x.overdue_days), x.due))
@@ -540,11 +443,6 @@ def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
 
 
 def bucket_funnel(items: List[FunnelItem]) -> Tuple[List[FunnelItem], List[FunnelItem]]:
-    """
-    Bucket funnel items by age:
-    - Immediate: >7 days old
-    - Recent: ≤7 days old
-    """
     immediate = [x for x in items if x.age_days > 7]
     recent = [x for x in items if 0 <= x.age_days <= 7]
     immediate.sort(key=lambda x: (-x.age_days, x.item_date))
@@ -553,7 +451,6 @@ def bucket_funnel(items: List[FunnelItem]) -> Tuple[List[FunnelItem], List[Funne
 
 
 def overdue_label(od: int) -> str:
-    """Generate human-readable overdue label."""
     if od > 0:
         return f"{od} days overdue"
     if od == 0:
@@ -562,7 +459,6 @@ def overdue_label(od: int) -> str:
 
 
 def age_label(ad: int) -> str:
-    """Generate human-readable age label for funnel items."""
     if ad > 0:
         return f"{ad} days old"
     return "Captured today"
@@ -573,12 +469,10 @@ def age_label(ad: int) -> str:
 # =========================
 
 def _render_time_blocking(meetings: List[Meeting]) -> List[str]:
-    """Render meeting lines for Time Blocking section."""
     return [f"- {min_to_hhmm(m.start_min)} - {min_to_hhmm(m.end_min)} MEET [[{m.title}]]" for m in meetings]
 
 
-def _block_label(b: Block) -> str:
-    """Get display label for a block type."""
+def _block_label(kind: str) -> str:
     labels = {
         "DEEP_WORK": "Deep Work (max 1 task)",
         "ADMIN_AM": "Admin AM (email/ops)",
@@ -586,105 +480,82 @@ def _block_label(b: Block) -> str:
         "SOCIAL_POST": "Social (post + engage)",
         "SOCIAL_REPLIES": "Social (commenting + replies)",
     }
-    return labels.get(b.kind, b.kind)
+    return labels.get(kind, kind)
 
 
 def render_atlas_block(
-        today: date,
-        meetings: List[Meeting],
-        required_blocks: List[Block],
-        quick_wins_blocks: List[Block],
-        imm: List[Task],
-        crit: List[Task],
-        std: List[Task],
-        active_task_count: int,
-        funnel_immediate: List[FunnelItem],
-        funnel_recent: List[FunnelItem],
-        funnel_total: int,
-        funnel_gt7: int,
+    today: date,
+    meetings: List[Meeting],
+    required_blocks: List[Block],
+    quick_wins_blocks: List[Block],
+    imm: List[Task],
+    crit: List[Task],
+    std: List[Task],
+    active_task_count: int,
+    funnel_immediate: List[FunnelItem],
+    funnel_recent: List[FunnelItem],
+    funnel_total: int,
+    funnel_gt7: int,
 ) -> str:
-    """
-    Render complete ATLAS block with all sections.
-    This is the single source of truth for structure.
-
-    CRITICAL: Only renders blocks with actual times if they were successfully placed.
-    Unplaced blocks appear without times to avoid phantom scheduling.
-    """
     lines: List[str] = []
     lines.append("<!-- ATLAS:START -->")
     lines.append("")
     lines.append(f"## ATLAS Focus Plan ({today.isoformat()})")
     lines.append("")
 
-    # ======================
-    # 1) TIME BLOCKING
-    # ======================
     lines.append("### Time Blocking")
-    mt_lines = _render_time_blocking(meetings)
-    if mt_lines:
-        lines.extend(mt_lines)
-    else:
-        lines.append("- (no meetings)")
+    mt = _render_time_blocking(meetings)
+    lines.extend(mt if mt else ["- (no meetings)"])
     lines.append("")
 
-    # ======================
-    # 2) PRE-PLACED BLOCKS
-    # ======================
     lines.append("**🧱 PRE-PLACED BLOCKS:**")
 
-    # Define the canonical set of required blocks (always present, in this order)
-    # This ensures consistent structure across all days for Ollama
-    REQUIRED_BLOCKS = [
-        ("DEEP_WORK", Block(0, 0, kind="DEEP_WORK", max_tasks=1)),
-        ("ADMIN_AM", Block(0, 0, kind="ADMIN_AM", max_tasks=3)),
-        ("SOCIAL_POST", Block(0, 0, kind="SOCIAL_POST")),
-        ("SOCIAL_REPLIES", Block(0, 0, kind="SOCIAL_REPLIES")),
-        ("ADMIN_PM", Block(0, 0, kind="ADMIN_PM", max_tasks=3)),
-    ]
+    REQUIRED = ["DEEP_WORK", "ADMIN_AM", "SOCIAL_POST", "SOCIAL_REPLIES", "ADMIN_PM"]
 
-    # Build lookup of successfully placed blocks
-    placed_by_kind: dict[str, Block] = {}
+    placed_by_kind: Dict[str, Block] = {}
     for b in required_blocks:
         if b.kind in placed_by_kind:
             raise ValueError(f"Duplicate block kind placed: {b.kind}")
         placed_by_kind[b.kind] = b
 
-    # Render each required block (placed with times, or unplaced without times)
-    for kind, default_block in REQUIRED_BLOCKS:
-        if kind in placed_by_kind:
-            # Block was successfully placed - render WITH times
-            b = placed_by_kind[kind]
-            label = _block_label(b)
+    # If there are NO #deep tasks at all, we hard-freeze the Deep Work placeholder.
+    # This prevents the model from stuffing random overdue items into Deep Work.
+    has_deep_tasks = any(t.is_deep for t in (imm + crit + std))
 
-            if b.kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
-                lines.append(
-                    f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {label}"
-                )
-            else:
-                lines.append(
-                    f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {label}"
-                )
-                for _ in range(b.placeholder_count()):
-                    lines.append("  - ")
+    for kind in REQUIRED:
+        label = _block_label(kind)
+        b = placed_by_kind.get(kind)
+
+        if b:
+            if kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
+                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {label}")
+                continue
+
+            lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {label}")
+
+            if kind == "DEEP_WORK" and not has_deep_tasks:
+                lines.append("  - (no #deep tasks)")
+                continue
+
+            for _ in range(b.placeholder_count()):
+                lines.append("  - ")
         else:
-            # Block was NOT placed - render WITHOUT times
-            label = _block_label(default_block)
+            lines.append(f"- {label}")
+            if kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
+                continue
 
-            if default_block.kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
-                lines.append(f"- {label}")
-            else:
-                lines.append(f"- {label}")
-                for _ in range(default_block.placeholder_count()):
-                    lines.append("  - ")
+            if kind == "DEEP_WORK" and not has_deep_tasks:
+                lines.append("  - (no #deep tasks)")
+                continue
+
+            default_placeholders = 1 if kind == "DEEP_WORK" else 3
+            for _ in range(default_placeholders):
+                lines.append("  - ")
 
     lines.append("")
 
-    # ======================
-    # 3) QUICK WINS CAPACITY
-    # ======================
     lines.append("**⚡ QUICK WINS CAPACITY (15-min units):**")
     if not quick_wins_blocks:
-        # Fallback if no quick wins windows found
         lines.append("- (manual pick): 1 unit")
         lines.append("  - ")
     else:
@@ -692,18 +563,15 @@ def render_atlas_block(
             lines.append(f"- {min_to_hhmm(qb.start_min)} - {min_to_hhmm(qb.end_min)}: {qb.capacity_units} units")
             for _ in range(qb.capacity_units):
                 lines.append("  - ")
+
     lines.append("")
 
-    # ======================
-    # 4) FOCUS SECTION
-    # ======================
     lines.append("### Focus")
     lines.append("")
     lines.append("**🎯 TASK PRIORITIES:**")
     lines.append("")
 
-    def _render_tier(title: str, tasks: List[Task]):
-        """Helper to render a task tier if it has tasks."""
+    def render_tier(title: str, tasks: List[Task]) -> None:
         if not tasks:
             return
         lines.append(title)
@@ -711,16 +579,13 @@ def render_atlas_block(
             lines.append(f"- {t.display} – {overdue_label(t.overdue_days)}")
         lines.append("")
 
-    _render_tier("**IMMEDIATE (Overdue >7 days OR Due Today):**", imm)
-    _render_tier("**CRITICAL (Overdue 3–7 days):**", crit)
-    _render_tier("**STANDARD (Overdue 1–2 days OR Due within 3 days):**", std)
+    render_tier("**IMMEDIATE (Overdue >7 days OR Due Today):**", imm)
+    render_tier("**CRITICAL (Overdue 3–7 days):**", crit)
+    render_tier("**STANDARD (Overdue 1–2 days OR Due within 3 days):**", std)
 
     lines.append(f"**Active task count:** {active_task_count}")
     lines.append("")
 
-    # ======================
-    # 5) FUNNEL SECTION
-    # ======================
     lines.append("**📥 FUNNEL:**")
     lines.append("")
 
@@ -739,6 +604,7 @@ def render_atlas_block(
     lines.append(f"**Funnel count:** {funnel_total} total, {funnel_gt7} items >7 days old")
     lines.append("")
     lines.append("<!-- ATLAS:END -->")
+
     return "\n".join(lines)
 
 
@@ -746,20 +612,188 @@ def render_atlas_block(
 # Obsidian IO: replace ATLAS block
 # =========================
 
-ATLAS_BLOCK_RE = re.compile(
-    r"(?s)<!--\s*ATLAS:START\s*-->.*?<!--\s*ATLAS:END\s*-->",
-    flags=re.MULTILINE
-)
+ATLAS_BLOCK_RE = re.compile(r"(?s)<!--\s*ATLAS:START\s*-->.*?<!--\s*ATLAS:END\s*-->", re.MULTILINE)
 
 
 def replace_atlas_block(note_text: str, new_block: str) -> str:
-    """
-    Replace existing ATLAS block in note, or append if not present.
-    """
     if ATLAS_BLOCK_RE.search(note_text):
         return ATLAS_BLOCK_RE.sub(new_block, note_text, count=1)
-    # Append to end if no existing block
     return note_text.rstrip() + "\n\n" + new_block + "\n"
+
+
+# =========================
+# JSON fill workflow
+# =========================
+
+PLACEHOLDER_LINE = "  - "
+
+
+def _atlas_block_only(text: str) -> str:
+    m = ATLAS_BLOCK_RE.search(text)
+    if not m:
+        raise ValueError("No ATLAS block found")
+    return m.group(0)
+
+
+def build_fill_request(atlas_block: str) -> Dict:
+    """Create a JSON request describing each placeholder slot.
+
+    Slot ids are stable based on traversal order through blocks + placeholders.
+    """
+    lines = atlas_block.splitlines()
+
+    # Parse available tasks (verbatim) from Focus section.
+    # We only allow placements that match these exact lines.
+    candidates: List[str] = []
+    in_focus = False
+    for ln in lines:
+        if ln.strip() == "### Focus":
+            in_focus = True
+            continue
+        if in_focus and ln.strip().startswith("<!-- ATLAS:END"):
+            break
+        if in_focus and ln.startswith("- "):
+            candidates.append(ln[2:])
+
+    # Build slots by detecting which block we're in.
+    slots: List[Dict] = []
+    current_kind: Optional[str] = None
+    kind_counters: Dict[str, int] = {}
+
+    for ln in lines:
+        m = re.match(r"^-\s+(\d{4})\s*-\s*(\d{4}):\s+(.*)$", ln)
+        if m:
+            label = m.group(3)
+            # Map label back to kind using known labels.
+            label_to_kind = {
+                "Deep Work (max 1 task)": "DEEP_WORK",
+                "Admin AM (email/ops)": "ADMIN_AM",
+                "Admin PM (wrap-up)": "ADMIN_PM",
+                "Social (post + engage)": "SOCIAL_POST",
+                "Social (commenting + replies)": "SOCIAL_REPLIES",
+            }
+            current_kind = label_to_kind.get(label, None)
+            continue
+
+        # Quick wins headers
+        if ln.startswith("- ") and ":" in ln and " units" in ln:
+            # Example: - 1430 - 1530: 4 units
+            current_kind = "QUICK_WINS"
+            continue
+
+        if ln == PLACEHOLDER_LINE:
+            if not current_kind:
+                # Unknown bucket; still create a slot so the model can respond,
+                # but validation will likely reject placements for unknown kinds.
+                current_kind = "UNKNOWN"
+            kind_counters[current_kind] = kind_counters.get(current_kind, 0) + 1
+            slot_id = f"{current_kind}_{kind_counters[current_kind]}"
+            slots.append({"slot_id": slot_id, "kind": current_kind})
+
+    return {
+        "version": "atlas-fill-request-v1",
+        "slots": slots,
+        "allowed_tasks": candidates,
+    }
+
+
+def apply_fill_plan(atlas_block: str, fill_plan: Dict) -> str:
+    """Apply a JSON fill plan to the ATLAS block.
+
+    Expected fill plan shape:
+    {"fills": [{"slot_id": "ADMIN_AM_1", "task": "<verbatim task>"}, ...]}
+    """
+    request = build_fill_request(atlas_block)
+    allowed = set(request["allowed_tasks"])
+
+    fills_raw = fill_plan.get("fills", [])
+    if not isinstance(fills_raw, list):
+        raise ValueError("fill_plan.fills must be a list")
+
+    # Validate and build mapping
+    slot_to_task: Dict[str, str] = {}
+    used_tasks: set[str] = set()
+
+    for item in fills_raw:
+        if not isinstance(item, dict):
+            continue
+        slot_id = str(item.get("slot_id", "")).strip()
+        task = str(item.get("task", "")).rstrip("\n")
+        if not slot_id or not task:
+            continue
+        if task not in allowed:
+            continue
+        if task in used_tasks:
+            continue
+        # Deep work enforcement
+        if slot_id.startswith("DEEP_WORK_") and ("#deep" not in task.lower()):
+            continue
+        slot_to_task[slot_id] = task
+        used_tasks.add(task)
+
+    # Apply in placeholder traversal order
+    out_lines: List[str] = []
+    current_kind: Optional[str] = None
+    kind_counters: Dict[str, int] = {}
+
+    for ln in atlas_block.splitlines():
+        m = re.match(r"^-\s+(\d{4})\s*-\s*(\d{4}):\s+(.*)$", ln)
+        if m:
+            label = m.group(3)
+            label_to_kind = {
+                "Deep Work (max 1 task)": "DEEP_WORK",
+                "Admin AM (email/ops)": "ADMIN_AM",
+                "Admin PM (wrap-up)": "ADMIN_PM",
+                "Social (post + engage)": "SOCIAL_POST",
+                "Social (commenting + replies)": "SOCIAL_REPLIES",
+            }
+            current_kind = label_to_kind.get(label, None)
+            out_lines.append(ln)
+            continue
+
+        if ln.startswith("- ") and ":" in ln and " units" in ln:
+            current_kind = "QUICK_WINS"
+            out_lines.append(ln)
+            continue
+
+        if ln == PLACEHOLDER_LINE:
+            kind = current_kind or "UNKNOWN"
+            kind_counters[kind] = kind_counters.get(kind, 0) + 1
+            slot_id = f"{kind}_{kind_counters[kind]}"
+            task = slot_to_task.get(slot_id, "")
+            if task:
+                out_lines.append(f"  - {task}")
+            else:
+                out_lines.append(PLACEHOLDER_LINE)
+            continue
+
+        out_lines.append(ln)
+
+    return "\n".join(out_lines)
+
+
+def run_ollama_json(model: str, payload: Dict) -> Dict:
+    """Run `ollama run <model>` and parse the returned JSON.
+
+    This expects the model to output JSON only.
+    """
+    prompt = json.dumps(payload, ensure_ascii=False)
+    proc = subprocess.run(
+        ["ollama", "run", model],
+        input=prompt,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "ollama run failed")
+
+    # Best-effort: strip leading/trailing whitespace
+    out = proc.stdout.strip()
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Model did not return valid JSON: {e}\n---\n{out[:4000]}")
 
 
 # =========================
@@ -770,67 +804,28 @@ DEFAULT_SCRATCHPAD = Path("/Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scr
 DEFAULT_DAILY_DIR = Path("/Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes")
 
 
-def main():
-    """Main entry point for ATLAS transform."""
-    ap = argparse.ArgumentParser(
-        description="ATLAS transform: build ATLAS block and write into daily note.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Process today's note
-  python atlas_transform.py
+def main() -> int:
+    ap = argparse.ArgumentParser(description="ATLAS transform: build ATLAS block and write into daily note.")
+    ap.add_argument("--daily", type=str, default="", help="Path to daily note (YYYY-MM-DD.md).")
+    ap.add_argument("--daily-dir", type=str, default=str(DEFAULT_DAILY_DIR), help="Daily notes directory.")
+    ap.add_argument("--scratchpad", type=str, default=str(DEFAULT_SCRATCHPAD), help="Scratchpad path.")
+    ap.add_argument("--stdout", action="store_true", help="Print ATLAS block to stdout instead of writing.")
+    ap.add_argument("--date", type=str, default="", help="Force date YYYY-MM-DD (optional).")
 
-  # Process specific date
-  python atlas_transform.py --date 2025-12-20
+    ap.add_argument("--export-fill-json", type=str, default="", help="Write fill request JSON to this path.")
+    ap.add_argument("--apply-fill-json", type=str, default="", help="Apply fill plan JSON from this path.")
+    ap.add_argument("--ollama-fill", type=str, default="", help="Run ollama model (JSON mode) and apply output.")
 
-  # Output to stdout instead of writing
-  python atlas_transform.py --stdout
-
-  # Use custom paths
-  python atlas_transform.py --daily-dir ~/Documents/Notes --scratchpad ~/scratch.md
-        """
-    )
-    ap.add_argument(
-        "--daily",
-        type=str,
-        default="",
-        help="Path to daily note (YYYY-MM-DD.md). If omitted, uses today in the default daily dir."
-    )
-    ap.add_argument(
-        "--daily-dir",
-        type=str,
-        default=str(DEFAULT_DAILY_DIR),
-        help="Daily notes directory."
-    )
-    ap.add_argument(
-        "--scratchpad",
-        type=str,
-        default=str(DEFAULT_SCRATCHPAD),
-        help="Scratchpad path."
-    )
-    ap.add_argument(
-        "--stdout",
-        action="store_true",
-        help="Print ATLAS block to stdout instead of writing to daily note."
-    )
-    ap.add_argument(
-        "--date",
-        type=str,
-        default="",
-        help="Force date YYYY-MM-DD (optional)."
-    )
     args = ap.parse_args()
 
-    # Parse forced date if provided
     forced_today: Optional[date] = None
     if args.date:
         try:
             forced_today = parse_iso_date(args.date)
-        except ValueError as e:
+        except ValueError:
             print(f"Error: Invalid date format '{args.date}'. Use YYYY-MM-DD.")
             return 1
 
-    # Determine daily note path
     daily_dir = Path(args.daily_dir).expanduser()
     if args.daily:
         daily_path = Path(args.daily).expanduser()
@@ -840,11 +835,9 @@ Examples:
 
     scratchpad_path = Path(args.scratchpad).expanduser()
 
-    # Read source files
     daily_text = read_text(daily_path) if daily_path.exists() else ""
     scratch_text = read_text(scratchpad_path) if scratchpad_path.exists() else ""
 
-    # Determine "today" date (forced > filename > system)
     today = forced_today
     if not today and daily_path.name.endswith(".md"):
         stem = daily_path.stem
@@ -856,29 +849,21 @@ Examples:
     if not today:
         today = datetime.now().date()
 
-    # Extract meetings ONLY from daily note time-blocking section
     meetings = clamp_meetings_to_day(extract_meetings_from_daily(daily_text))
-
-    # Extract tasks/funnel from combined sources
     raw = daily_text + "\n\n" + scratch_text
 
-    # Build schedule
     busy = build_busy_windows(meetings)
-    free_windows = invert_busy_to_free(busy)
+    free = invert_busy_to_free(busy)
 
-    # Extract and tier tasks
     tasks, active_count = extract_tasks(raw, today)
     imm, crit, std = tier_tasks(tasks)
 
-    # Extract and bucket funnel items
     funnel_items = extract_funnel(raw, today)
     funnel_immediate, funnel_recent = bucket_funnel(funnel_items)
 
-    # Place blocks
-    required_blocks, remaining = place_required_blocks(free_windows)
+    required_blocks, remaining = place_required_blocks(free)
     quick_wins_blocks = make_quick_wins_blocks(remaining)
 
-    # Render complete ATLAS block
     atlas_block = render_atlas_block(
         today=today,
         meetings=meetings,
@@ -894,12 +879,28 @@ Examples:
         funnel_gt7=len(funnel_immediate),
     )
 
-    # Output
+    # If requested, export fill request JSON
+    if args.export_fill_json:
+        req = build_fill_request(atlas_block)
+        outp = Path(args.export_fill_json).expanduser()
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_text(json.dumps(req, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # Apply a provided fill plan JSON (or run ollama and apply its JSON)
+    if args.ollama_fill:
+        req = build_fill_request(atlas_block)
+        plan = run_ollama_json(args.ollama_fill, req)
+        atlas_block = apply_fill_plan(atlas_block, plan)
+
+    if args.apply_fill_json:
+        plan_path = Path(args.apply_fill_json).expanduser()
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        atlas_block = apply_fill_plan(atlas_block, plan)
+
     if args.stdout:
         print(atlas_block)
         return 0
 
-    # Write to daily note
     updated_daily = replace_atlas_block(daily_text, atlas_block)
     daily_path.parent.mkdir(parents=True, exist_ok=True)
     write_text(daily_path, updated_daily)
@@ -908,4 +909,4 @@ Examples:
 
 
 if __name__ == "__main__":
-    exit(main())
+    raise SystemExit(main())

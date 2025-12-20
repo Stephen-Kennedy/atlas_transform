@@ -1,0 +1,30 @@
+{
+  "atlas": {"date": "2025-12-20"},
+  "slots": [
+    {"id": "DEEP_WORK_1", "kind": "DEEP_WORK"},
+    {"id": "ADMIN_AM_1", "kind": "ADMIN_AM"},
+    {"id": "ADMIN_AM_2", "kind": "ADMIN_AM"},
+    {"id": "ADMIN_AM_3", "kind": "ADMIN_AM"},
+    {"id": "ADMIN_PM_1", "kind": "ADMIN_PM"},
+    {"id": "ADMIN_PM_2", "kind": "ADMIN_PM"},
+    {"id": "ADMIN_PM_3", "kind": "ADMIN_PM"},
+    {"id": "QUICK_WINS_1", "kind": "QUICK_WINS"},
+    {"id": "QUICK_WINS_2", "kind": "QUICK_WINS"},
+    {"id": "QUICK_WINS_3", "kind": "QUICK_WINS"},
+    {"id": "QUICK_WINS_4", "kind": "QUICK_WINS"}
+  ],
+  "tasks": {
+    "immediate": [
+      "Complete loom call to potential Praxis Scribe client 🔁 every day for 5 times ➕ 2025-10-21 📅 2025-10-16 – 65 days overdue",
+      "Submit to present at APCO 2026 📅 2025-10-24 – 57 days overdue"
+    ],
+    "critical": [],
+    "standard": [],
+    "funnel_immediate": [
+      "2025-10-30 Look to move Shawn to exempt position #quickcap – 51 days old"
+    ],
+    "funnel_recent": [
+      "Return Idexx contract On #todo #tforge ➕ 2025-12-19 📅 2026-01-13 – 1 days old"
+    ]
+  }
+}
