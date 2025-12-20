@@ -1,0 +1,32 @@
+- [ ] check on light user license for MCM for Peter #todo
+ - [x] Set up report/schedule meeting to discuss SCSO, VPSD, WWPD 📅 2025-11-07 ✅ 2025-12-07
+ - [x] Check calendar permissions for Jacki #todo ✅ 2025-12-07
+- [x] Check with Leslie Smith on switch for building to go live 📅 2025-11-10 ✅ 2025-11-18
+ - [x] Send CIC EffiGov bot for users to provide testing/feedback 📅 2025-11-05 ✅ 2025-11-18
+ - [ ] Send to David current PP Slide Deck, Community Program overview, and links to training videos.  📅 2025-11-05 
+ - [ ] check to see if RapidDeploy October 2025 submitted 📅 2025-11-04 
+- [x] Send follow up email to Phil with radio accounts for Bushnell and South Sumter high school include the pods as radiant as part of the radio account. Also look at the villages high school in Middleton and get a count for that as well. 📅 2025-11-03 ✅ 2025-11-18
+ - [ ] Submit to present at APCO 2026 📅 2025-10-24 
+ - [x] Look to apply for NENA 2026 🔺 📅 2025-10-24 ✅ 2025-11-03
+ - [x] Follow up on tower light for Wildwood Jason Mchugh 📅 2025-10-16 ✅ 2025-12-05
+ - [x] AI idea for processing inactive files going forward #todo 📅 2025-10-25 ✅ 2025-12-19
+ - [ ] Sole source request for SVI 📅 2025-11-03
+ - [ ] Work on transportation plan renewal. Add to Kanban for BOCC Agenda 📅 2025-11-03
+ - [x] Build summary from the day for Effigov meeting to BA. Will capture in Tots 📅 2026-01-15 ✅ 2025-12-07
+ - [ ] Complete loom call to potential Praxis Scribe client 🔁 every day for 5 times ➕ 2025-10-21 📅 2025-10-16
+ - [x] post I am presenting at CASS 📅 2025-10-09 ✅ 2025-11-18
+ - [ ] Revise state 911 plan 📅 2026-01-05
+
+# Funnel
+- [ ] 2025-11-18 Reach out to Leon at the state to find out about what funding is available for text to 911 for the Motorola project #quickcap
+- [ ] 2025-11-18 Schedule meeting with Gary to review font findings #quickcap
+- [ ] 2025-11-17 Check docusign notary #quickcap
+- [ ] 2025-11-17 Check with DocuSign on clerk a notary signature #quickcap
+- [ ] 2025-11-07 Follow up with Shandscair on onecall #quickcap
+- [ ] 2025-10-30 Look to move Shawn to exempt position  #quickcap
+- [x] 2025-10-29 Find Aistorical teference on rapidsos to steve #quickcap 📅 2025-10-30 ✅ 2025-10-30
+- [x] 2025-10-28 Check om laptop for shawn #quickcap 📅 2025-10-29 ✅ 2025-10-30
+- [x] 2025-10-23 Send employee list to MCM #quickcap ✅ 2025-10-30
+- [x] 2025-10-16 Email travi oliver for Wednesday at 8 am #quickcap ✅ 2025-10-30
+- [ ] 2025-10-02 Consider ECC for constant contact #quickcap 🛫 2025-10-12 📅 2025-11-02
+- [ ] Return Idexx contract On #todo #tforge ➕ 2025-12-19 📅 2026-01-13

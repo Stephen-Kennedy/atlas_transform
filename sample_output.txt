@@ -1,0 +1,53 @@
+SCHEDULE_BUNDLE v1
+TODAY_ISO: 2025-12-20
+
+MEETINGS (normalized):
+- 1100-1400 | Gmail Wolfpack party
+
+FREE_WINDOWS (8-5 with lunch blocked):
+- 0800-1100 | minutes: 180
+- 1400-1700 | minutes: 180
+
+REQUIRED_BLOCKS (pre-placed):
+- 0800-1000 | DEEP_WORK | max_tasks: 1
+- 1000-1100 | ADMIN_AM | capacity_units: 4
+- 1400-1430 | SOCIAL_POST | capacity_units: 2
+- 1530-1600 | SOCIAL_REPLIES | capacity_units: 2
+- 1600-1700 | ADMIN_PM | capacity_units: 4
+
+QUICK_WINS_BLOCKS (15-min units):
+- 1430-1530 | capacity_units: 4
+
+TASKS_TIERED:
+ACTIVE_TASK_COUNT: 8
+DEEP_CANDIDATE_COUNT: 0
+DEEP_CANDIDATES:
+- (none)
+IMMEDIATE:
+- Complete loom call to potential Praxis Scribe client 🔁 every day for 5 times ➕ 2025-10-21 | due: 2025-10-16 | overdue_days: 65 | label: 65 days overdue | deep_candidate: false
+- Submit to present at APCO 2026 | due: 2025-10-24 | overdue_days: 57 | label: 57 days overdue | deep_candidate: false
+- Sole source request for SVI | due: 2025-11-03 | overdue_days: 47 | label: 47 days overdue | deep_candidate: false
+- Work on transportation plan renewal. Add to Kanban for BOCC Agenda | due: 2025-11-03 | overdue_days: 47 | label: 47 days overdue | deep_candidate: false
+- check to see if RapidDeploy October 2025 submitted | due: 2025-11-04 | overdue_days: 46 | label: 46 days overdue | deep_candidate: false
+- Send to David current PP Slide Deck, Community Program overview, and links to training videos. | due: 2025-11-05 | overdue_days: 45 | label: 45 days overdue | deep_candidate: false
+CRITICAL:
+- (none)
+STANDARD:
+- (none)
+
+FUNNEL_TIERED:
+FUNNEL_COUNT: 8 total, 7 items >7 days old
+IMMEDIATE_PROCESSING (>7 days old):
+- 2025-10-02 | Consider ECC for constant contact #quickcap 🛫 2025-10-12 | age_days: 79 | label: 79 days old
+- 2025-10-30 | Look to move Shawn to exempt position #quickcap | age_days: 51 | label: 51 days old
+- 2025-11-07 | Follow up with Shandscair on onecall #quickcap | age_days: 43 | label: 43 days old
+- 2025-11-17 | Check docusign notary #quickcap | age_days: 33 | label: 33 days old
+- 2025-11-17 | Check with DocuSign on clerk a notary signature #quickcap | age_days: 33 | label: 33 days old
+- 2025-11-18 | Reach out to Leon at the state to find out about what funding is available for text to 911 for the Motorola project #quickcap | age_days: 32 | label: 32 days old
+- 2025-11-18 | Schedule meeting with Gary to review font findings #quickcap | age_days: 32 | label: 32 days old
+RECENT (<=7 days old):
+- 2025-12-19 | Return Idexx contract On #todo #tforge ➕ 2025-12-19 | age_days: 1 | label: 1 days old
+
+SUMMARY:
+MEETING_COUNT: 1
+LARGEST_FREE_WINDOW: 0800-1100 (180 min)
