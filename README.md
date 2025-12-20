@@ -5,6 +5,7 @@ A small CLI tool that converts a pasted Obsidian daily note (execution header + 
 The goal: **Python does all time/date math and scheduling structure**. Ollama/ATLAS does **lightweight formatting + task placement decisions** (no date math).
 
 ---
+f
 
 ## What it does
 
