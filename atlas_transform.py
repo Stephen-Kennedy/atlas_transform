@@ -424,24 +424,30 @@ def age_label(ad: int) -> str:
 # =========================
 
 def main():
-    raw = sys.stdin.read()
-    if not raw.strip():
-        return
+    from atlas_paths import get_paths
+    from atlas_io import parse_execution_today, read_daily_note, read_file
 
-    today = parse_execution_today_iso(raw)
+    paths = get_paths()
 
-    # Optional explicit override lines (recommended)
-    if not today:
-        m = re.search(r"(?im)^\s*(?:TODAY|DATE)\s*:\s*(\d{4}-\d{2}-\d{2})\s*$", raw)
-        if m:
-            try:
-                today = parse_iso_date(m.group(1))
-            except ValueError:
-                today = None
+    stdin_text = ""
+    if not sys.stdin.isatty():  # only read stdin when something is being piped in
+        stdin_text = sys.stdin.read()
 
-    # Final fallback: system date (SAFE)
-    if not today:
-        today = datetime.now().date()
+    # 1) Determine TODAY from the execution header if present, else system date
+    today = parse_execution_today(stdin_text) or datetime.now().date()
+
+    # 2) Pull content directly from Obsidian
+    daily_note_text = read_daily_note(paths.daily_notes_dir, today)
+    scratchpad_text = read_file(paths.scratchpad)
+
+    # 3) Build the combined in-memory input used by the rest of your script
+    raw = (
+            stdin_text.strip() + "\n\n"
+            + "### DAILY_NOTE\n"
+            + daily_note_text.strip() + "\n\n"
+            + "### SCRATCHPAD\n"
+            + scratchpad_text.strip() + "\n"
+    )
 
     meetings = clamp_meetings_to_day(extract_meetings(raw))
     busy = build_busy_windows(meetings)
