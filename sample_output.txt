@@ -1,0 +1,47 @@
+SCHEDULE_BUNDLE v1
+TODAY_ISO: 2025-11-07
+
+MEETINGS (normalized):
+- 1100-1400 | Gmail Wolfpack party
+
+FREE_WINDOWS (8-5 with lunch blocked):
+- 0800-1100 | minutes: 180
+- 1400-1700 | minutes: 180
+
+REQUIRED_BLOCKS (pre-placed):
+- 0800-1000 | DEEP_WORK | max_tasks: 1
+- 1000-1100 | ADMIN_AM | capacity_units: 4
+- 1400-1430 | SOCIAL_POST | capacity_units: 2
+- 1530-1600 | SOCIAL_REPLIES | capacity_units: 2
+- 1600-1700 | ADMIN_PM | capacity_units: 4
+
+QUICK_WINS_BLOCKS (15-min units):
+- 1430-1530 | capacity_units: 4
+
+TASKS_TIERED:
+ACTIVE_TASK_COUNT: 15
+DEEP_CANDIDATE_COUNT: 0
+DEEP_CANDIDATES:
+- (none)
+IMMEDIATE:
+- Complete loom call to potential Praxis Scribe client 🔁 every day for 5 times ➕ 2025-10-21 | due: 2025-10-16 | overdue_days: 22 | label: 22 days overdue | deep_candidate: false
+- Submit to present at APCO 2026 | due: 2025-10-24 | overdue_days: 14 | label: 14 days overdue | deep_candidate: false
+CRITICAL:
+- 2025-10-02 Consider ECC for constant contact #quickcap 🛫 2025-10-12 | due: 2025-11-02 | overdue_days: 5 | label: 5 days overdue | deep_candidate: false
+- Sole source request for SVI | due: 2025-11-03 | overdue_days: 4 | label: 4 days overdue | deep_candidate: false
+- Work on transportation plan renewal. Add to Kanban for BOCC Agenda | due: 2025-11-03 | overdue_days: 4 | label: 4 days overdue | deep_candidate: false
+- check to see if RapidDeploy October 2025 submitted | due: 2025-11-04 | overdue_days: 3 | label: 3 days overdue | deep_candidate: false
+STANDARD:
+- Send to David current PP Slide Deck, Community Program overview, and links to training videos. | due: 2025-11-05 | overdue_days: 2 | label: 2 days overdue | deep_candidate: false
+
+FUNNEL_TIERED:
+FUNNEL_COUNT: 8 total, 2 items >7 days old
+IMMEDIATE_PROCESSING (>7 days old):
+- 2025-10-02 | Consider ECC for constant contact #quickcap 🛫 2025-10-12 | age_days: 36 | label: 36 days old
+- 2025-10-30 | Look to move Shawn to exempt position #quickcap | age_days: 8 | label: 8 days old
+RECENT (<=7 days old):
+- 2025-11-07 | Follow up with Shandscair on onecall #quickcap | age_days: 0 | label: Captured today
+
+SUMMARY:
+MEETING_COUNT: 1
+LARGEST_FREE_WINDOW: 0800-1100 (180 min)
