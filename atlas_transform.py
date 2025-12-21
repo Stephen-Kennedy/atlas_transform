@@ -220,6 +220,70 @@ TASK_INCOMPLETE_RE = re.compile(r"^\s*-\s*\[\s*\]\s+(.+)$")
 TASK_COMPLETE_RE = re.compile(r"^\s*-\s*\[\s*x\s*\]\s+", re.IGNORECASE)
 DUE_RE = re.compile(r"📅\s*(\d{4}-\d{2}-\d{2})")
 
+# More permissive matcher for Tasks-plugin lines found across the vault
+TASK_ANY_INCOMPLETE_RE = re.compile(r"^\s*(?:>\s*)*[-*+]\s*\[(?!x|X).?\]\s+(.+)$")
+ARCHIVE_PATH_RE = re.compile(r"(^|/)(?:_archive|archive)(/|$)", re.IGNORECASE)
+
+def is_archived_path(p: Path) -> bool:
+    return ARCHIVE_PATH_RE.search(p.as_posix()) is not None
+
+def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_archived: bool = True) -> List[str]:
+    """
+    Collect not-done Tasks-plugin checkbox lines (with 📅 due dates) from folders/files.
+
+    - Each entry in `sources` may be a relative folder OR a relative .md file path.
+    - Excludes completed tasks ([x]) implicitly via regex.
+    - Excludes cancelled tasks containing '❌'.
+    - Excludes archive/_archive paths by default.
+
+    Returns normalized task lines in the form: "- [ ] <content>" so existing extractors can parse them.
+    """
+    out: List[str] = []
+    seen: set = set()
+
+    for src in sources:
+        base = (vault_root / src).expanduser().resolve()
+        if not base.exists():
+            continue
+
+        if base.is_file() and base.suffix.lower() == ".md":
+            md_files = [base]
+        else:
+            md_files = list(base.rglob("*.md"))
+
+        for md in md_files:
+            if any(part.startswith(".") for part in md.parts):
+                continue
+            if exclude_archived and is_archived_path(md):
+                continue
+
+            try:
+                lines = md.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                continue
+
+            for ln in lines:
+                m = TASK_ANY_INCOMPLETE_RE.match(ln)
+                if not m:
+                    continue
+
+                task_text = m.group(1).strip()
+
+                # Skip cancelled tasks
+                if "❌" in task_text:
+                    continue
+
+                # Keep only tasks that have a due date
+                if not DUE_RE.search(task_text):
+                    continue
+
+                norm = f"- [ ] {task_text}"
+                if norm in seen:
+                    continue
+                seen.add(norm)
+                out.append(norm)
+
+    return out
 
 def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
     tasks: List[Task] = []
@@ -434,8 +498,9 @@ def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
             imm.append(t)
         elif 3 <= od <= 7:
             crit.append(t)
-        elif (1 <= od <= 2) or (-3 <= od <= -1):
+        elif (1 <= od <= 2) or (od <= -1):
             std.append(t)
+
     imm.sort(key=lambda x: (-x.overdue_days, x.due))
     crit.sort(key=lambda x: (-x.overdue_days, x.due))
     std.sort(key=lambda x: (abs(x.overdue_days), x.due))
@@ -970,6 +1035,8 @@ def run_ollama_json(model: str, payload: Dict) -> Dict:
 
 DEFAULT_SCRATCHPAD = Path("/Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md")
 DEFAULT_DAILY_DIR = Path("/Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes")
+DEFAULT_VAULT_ROOT = Path("/Users/stephenkennedy/Obsidian/Lighthouse")
+DEFAULT_TASK_SOURCES = "4-RoR/Calendar"  # scan meeting notes + prior daily notes; scratchpad already included
 
 
 def main() -> int:
@@ -979,7 +1046,12 @@ def main() -> int:
     ap.add_argument("--scratchpad", type=str, default=str(DEFAULT_SCRATCHPAD), help="Scratchpad path.")
     ap.add_argument("--stdout", action="store_true", help="Print ATLAS block to stdout instead of writing.")
     ap.add_argument("--date", type=str, default="", help="Force date YYYY-MM-DD (optional).")
-
+    ap.add_argument("--vault-root", type=str, default=str(DEFAULT_VAULT_ROOT),
+                    help="Obsidian vault root used for extra task scanning.")
+    ap.add_argument("--task-sources", type=str, default=DEFAULT_TASK_SOURCES,
+                    help="Comma-separated relative folders/files to scan for Tasks-plugin tasks.")
+    ap.add_argument("--scan-vault-tasks", action="store_true",
+                    help="Scan task-sources for Tasks-plugin tasks and include them in the task pool.")
     ap.add_argument("--export-fill-json", type=str, default="", help="Write fill request JSON to this path.")
     ap.add_argument("--apply-fill-json", type=str, default="", help="Apply fill plan JSON from this path.")
     ap.add_argument("--ollama-fill", type=str, default="", help="Run ollama model (JSON mode) and apply output.")
@@ -1019,6 +1091,16 @@ def main() -> int:
 
     meetings = clamp_meetings_to_day(extract_meetings_from_daily(daily_text))
     raw = daily_text + "\n\n" + scratch_text
+
+    # Automatically include vault tasks when generating fill request / running ollama,
+    # or manually enable for normal runs via --scan-vault-tasks
+    scan_needed = bool(args.scan_vault_tasks or args.export_fill_json or args.ollama_fill or args.apply_fill_json)
+    if scan_needed:
+        vault_root = Path(args.vault_root).expanduser()
+        sources = [s.strip() for s in args.task_sources.split(",") if s.strip()]
+        extra_lines = collect_tasks_plugin_lines(vault_root, sources, exclude_archived=True)
+        if extra_lines:
+            raw = raw + "\n\n" + "\n".join(extra_lines)
 
     busy = build_busy_windows(meetings)
     free = invert_busy_to_free(busy)
