@@ -1,0 +1,37 @@
+Tasks with due dates (overdue, due today, and future) as of 2025-12-21 (top 16):
+
+CRITICAL (overdue)
+- (675d overdue) Review with [[James Boyd]] The fairgrounds WiFi / Speakers solution to confirm it meets the scope 📅 2024-02-15
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Meetings/2024-02-08 IT meeting.md:24  (due 2024-02-15)
+- (552d overdue) Set up AERES CAD remote access and let [[Jason Newquist]] know when we are set up - awaiting feedback from [[Rob Damuth]] and SOC team 📅 2024-06-17
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes/2024-05-08.md:20  (due 2024-06-17)
+- (545d overdue) Zendesk PulsePoint registration form 📅 2024-06-24
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes/2024-05-17.md:19  (due 2024-06-24)
+- (513d overdue) Follow up with Darren Segrest regarding radios for SCSO. Checked with [[Jacki Martin]] on 3/12 for feedback 📅 2024-07-26
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes/2024-02-07.md:20  (due 2024-07-26)
+- (496d overdue) Send price table breakdown to [[Bradley Arnold]] on access control costs 📅 2024-08-12
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes/2024-08-04.md:18  (due 2024-08-12)
+- (66d overdue) Follow up on tower light for Wildwood Jason Mchugh 📅 2025-10-16
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:6  (due 2025-10-16)
+- (58d overdue) Submit to present at APCO 2026 📅 2025-10-24
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:4  (due 2025-10-24)
+- (58d overdue) Look to apply for NENA 2026 🔺 📅 2025-10-24
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:5  (due 2025-10-24)
+- (49d overdue) 2025-10-02 Consider ECC for constant contact #ablt  #quickcap 🛫 2025-10-12 📅 2025-11-02
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:16  (due 2025-11-02)
+- (48d overdue) Draft MOU with Alachua County Crisis center for BOCC approval for 911-988 ➕ 2025-10-20 📅 2025-11-03
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Meetings/911-988 MOU 2025-10-20.md:18  (due 2025-11-03)
+- (48d overdue) Sole source request for SVI 📅 2025-11-03
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:7  (due 2025-11-03)
+- (48d overdue) Work on transportation plan renewal. Add to Kanban for BOCC Agenda 📅 2025-11-03
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:8  (due 2025-11-03)
+- (47d overdue) check to see if RapidDeploy October 2025 submitted 📅 2025-11-04
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:3  (due 2025-11-04)
+- (46d overdue) Send to David current PP Slide Deck, Community Program overview, and links to training videos. 📅 2025-11-05
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:2  (due 2025-11-05)
+
+FUTURE
+- (due in 15d) Revise state 911 plan 📅 2026-01-05
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:9  (due 2026-01-05)
+- (due in 23d) Return Idexx contract On #todo #tforge ➕ 2025-12-19 📅 2026-01-13
+      ↳ /Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md:17  (due 2026-01-13)
