@@ -383,13 +383,13 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
     slot = choose_slot(remaining, 60, prefer="earliest")
     if slot:
         st, en = slot
-        blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=3))
+        blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=2))
         remaining = subtract_interval(remaining, st, en)
 
     slot = choose_slot(remaining, 60, prefer="latest")
     if slot:
         st, en = slot
-        blocks.append(Block(st, en, kind="ADMIN_PM", max_tasks=3))
+        blocks.append(Block(st, en, kind="ADMIN_PM", max_tasks=2))
         remaining = subtract_interval(remaining, st, en)
 
     has_60 = any(w.minutes >= 60 for w in free_windows)
@@ -634,83 +634,201 @@ def _atlas_block_only(text: str) -> str:
         raise ValueError("No ATLAS block found")
     return m.group(0)
 
+def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Dict:
+    """
+    Build the JSON payload to send to Ollama.
 
-def build_fill_request(atlas_block: str) -> Dict:
-    """Create a JSON request describing each placeholder slot.
-
-    Slot ids are stable based on traversal order through blocks + placeholders.
+    Output shape matches the Modelfile expectations:
+    {
+      "atlas": {"date": "YYYY-MM-DD"},
+      "slots": [{"id": "...", "kind": "ADMIN_AM"}, ...],
+      "tasks": {
+        "immediate": [...],
+        "critical": [...],
+        "standard": [...],
+        "funnel_immediate": [...],
+        "funnel_recent": [...]
+      }
+    }
     """
     lines = atlas_block.splitlines()
 
-    # Parse available tasks (verbatim) from Focus section.
-    # We only allow placements that match these exact lines.
-    candidates: List[str] = []
+    # -------------------------
+    # 1) Determine date
+    # -------------------------
+    if not atlas_date:
+        m = re.search(r"##\s+ATLAS Focus Plan\s+\((\d{4}-\d{2}-\d{2})\)", atlas_block)
+        atlas_date = m.group(1) if m else ""
+
+    # -------------------------
+    # 2) Parse tasks by headings
+    # -------------------------
+    tasks = {
+        "immediate": [],
+        "critical": [],
+        "standard": [],
+        "funnel_immediate": [],
+        "funnel_recent": [],
+    }
+
     in_focus = False
+    bucket: Optional[str] = None
+
     for ln in lines:
         if ln.strip() == "### Focus":
             in_focus = True
             continue
-        if in_focus and ln.strip().startswith("<!-- ATLAS:END"):
+        if not in_focus:
+            continue
+        if ln.strip() == "<!-- ATLAS:END -->":
             break
-        if in_focus and ln.startswith("- "):
-            candidates.append(ln[2:])
 
-    # Build slots by detecting which block we're in.
-    slots: List[Dict] = []
-    current_kind: Optional[str] = None
-    kind_counters: Dict[str, int] = {}
+        s = ln.strip()
 
-    for ln in lines:
-        m = re.match(r"^-\s+(\d{4})\s*-\s*(\d{4}):\s+(.*)$", ln)
-        if m:
-            label = m.group(3)
-            # Map label back to kind using known labels.
-            label_to_kind = {
-                "Deep Work (max 1 task)": "DEEP_WORK",
-                "Admin AM (email/ops)": "ADMIN_AM",
-                "Admin PM (wrap-up)": "ADMIN_PM",
-                "Social (post + engage)": "SOCIAL_POST",
-                "Social (commenting + replies)": "SOCIAL_REPLIES",
-            }
-            current_kind = label_to_kind.get(label, None)
+        # Tier headings
+        if s.startswith("**IMMEDIATE"):
+            bucket = "immediate"
+            continue
+        if s.startswith("**CRITICAL"):
+            bucket = "critical"
+            continue
+        if s.startswith("**STANDARD"):
+            bucket = "standard"
             continue
 
-        # Quick wins headers
-        if ln.startswith("- ") and ":" in ln and " units" in ln:
-            # Example: - 1430 - 1530: 4 units
+        # Funnel headings
+        if s.startswith("**Items needing immediate processing"):
+            bucket = "funnel_immediate"
+            continue
+        if s.startswith("**Recent items"):
+            bucket = "funnel_recent"
+            continue
+
+        # Stop collecting on counts/headings we don't want
+        if s.startswith("**Active task count:**") or s.startswith("**Funnel count:**"):
+            bucket = None
+            continue
+
+        # Collect task lines (verbatim minus leading "- ")
+        if bucket and ln.startswith("- "):
+            tasks[bucket].append(ln[2:])
+
+    # -------------------------
+    # 3) Build slots from placeholders
+    # -------------------------
+    PLACEHOLDER = "  - "
+
+    label_to_kind = {
+        "Deep Work (max 1 task)": "DEEP_WORK",
+        "Admin AM (email/ops)": "ADMIN_AM",
+        "Admin PM (wrap-up)": "ADMIN_PM",
+        "Social (post + engage)": "SOCIAL_POST",
+        "Social (commenting + replies)": "SOCIAL_REPLIES",
+    }
+
+    current_kind: Optional[str] = None
+    counters: Dict[str, int] = {}
+    slots: List[Dict] = []
+
+    # Header regexes
+    block_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+(.*)$")          # "- 1000 - 1100: Admin AM ..."
+    quickwins_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+\d+\s+units\b")  # "- 1430 - 1530: 4 units"
+
+    for ln in lines:
+        # Detect quick wins header first
+        if quickwins_header_re.match(ln.strip()):
             current_kind = "QUICK_WINS"
             continue
 
-        if ln == PLACEHOLDER_LINE:
-            if not current_kind:
-                # Unknown bucket; still create a slot so the model can respond,
-                # but validation will likely reject placements for unknown kinds.
-                current_kind = "UNKNOWN"
-            kind_counters[current_kind] = kind_counters.get(current_kind, 0) + 1
-            slot_id = f"{current_kind}_{kind_counters[current_kind]}"
-            slots.append({"slot_id": slot_id, "kind": current_kind})
+        # Detect normal block header
+        m = block_header_re.match(ln.strip())
+        if m:
+            label = m.group(1).strip()
+            current_kind = label_to_kind.get(label)
+            continue
+
+        # Placeholder lines become slots
+        if ln == PLACEHOLDER:
+            kind = current_kind or "UNKNOWN"
+            counters[kind] = counters.get(kind, 0) + 1
+            slots.append({"id": f"{kind}_{counters[kind]}", "kind": kind})
 
     return {
-        "version": "atlas-fill-request-v1",
+        "atlas": {"date": atlas_date},
         "slots": slots,
-        "allowed_tasks": candidates,
+        "tasks": tasks,
     }
 
 
-def apply_fill_plan(atlas_block: str, fill_plan: Dict) -> str:
-    """Apply a JSON fill plan to the ATLAS block.
+def get_priority_pool_for_kind(kind: str, tasks_dict: Dict[str, List[str]]) -> List[str]:
+    """Return the prioritized task list for a given slot kind.
+
+    Used by auto-fill to complete any slots the LLM didn't fill.
+    """
+    if kind in ("ADMIN_AM", "ADMIN_PM"):
+        pool = (
+                tasks_dict.get("immediate", []) +
+                tasks_dict.get("critical", []) +
+                tasks_dict.get("standard", []) +
+                tasks_dict.get("funnel_immediate", []) +
+                tasks_dict.get("funnel_recent", [])
+        )
+    elif kind == "QUICK_WINS":
+        pool = (
+                tasks_dict.get("funnel_immediate", []) +
+                tasks_dict.get("funnel_recent", []) +
+                tasks_dict.get("standard", []) +
+                tasks_dict.get("critical", []) +
+                tasks_dict.get("immediate", [])
+        )
+    elif kind == "DEEP_WORK":
+        all_tasks = (
+                tasks_dict.get("immediate", []) +
+                tasks_dict.get("critical", []) +
+                tasks_dict.get("standard", []) +
+                tasks_dict.get("funnel_immediate", []) +
+                tasks_dict.get("funnel_recent", [])
+        )
+        pool = [t for t in all_tasks if "#deep" in t.lower()]
+    else:
+        pool = []
+    return pool
+
+def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Dict] = None) -> str:
+    """
+    Apply a JSON fill plan to the ATLAS block.
 
     Expected fill plan shape:
     {"fills": [{"slot_id": "ADMIN_AM_1", "task": "<verbatim task>"}, ...]}
+
+    Behavior:
+    - Accept only EXACT task matches from request tasks lists.
+    - Enforce no-duplicates.
+    - Enforce Deep Work requires #deep.
+    - After applying valid model fills, Python fills any remaining slots
+      deterministically using the same priority rules.
     """
-    request = build_fill_request(atlas_block)
-    allowed = set(request["allowed_tasks"])
+    # Use passed fill_request if provided, otherwise build it
+    if fill_request is None:
+        fill_request = build_fill_request(atlas_block)
+
+    request = fill_request
+
+    slots = request.get("slots", [])
+    tasks = request.get("tasks", {})
+    all_allowed = set(
+        tasks.get("immediate", [])
+        + tasks.get("critical", [])
+        + tasks.get("standard", [])
+        + tasks.get("funnel_immediate", [])
+        + tasks.get("funnel_recent", [])
+    )
 
     fills_raw = fill_plan.get("fills", [])
     if not isinstance(fills_raw, list):
         raise ValueError("fill_plan.fills must be a list")
 
-    # Validate and build mapping
+    # --- 1) Validate model-provided fills ---
     slot_to_task: Dict[str, str] = {}
     used_tasks: set[str] = set()
 
@@ -721,38 +839,86 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict) -> str:
         task = str(item.get("task", "")).rstrip("\n")
         if not slot_id or not task:
             continue
-        if task not in allowed:
+        if task not in all_allowed:
             continue
         if task in used_tasks:
             continue
-        # Deep work enforcement
         if slot_id.startswith("DEEP_WORK_") and ("#deep" not in task.lower()):
             continue
+
         slot_to_task[slot_id] = task
         used_tasks.add(task)
 
-    # Apply in placeholder traversal order
+    # --- 2) Python fallback: fill remaining slots sequentially ---
+    def pool_for_kind(kind: str) -> List[str]:
+        if kind in ("ADMIN_AM", "ADMIN_PM"):
+            return (
+                tasks.get("immediate", [])
+                + tasks.get("critical", [])
+                + tasks.get("standard", [])
+                + tasks.get("funnel_immediate", [])
+                + tasks.get("funnel_recent", [])
+            )
+        if kind == "QUICK_WINS":
+            return (
+                tasks.get("funnel_immediate", [])
+                + tasks.get("funnel_recent", [])
+                + tasks.get("standard", [])
+                + tasks.get("critical", [])
+                + tasks.get("immediate", [])
+            )
+        if kind == "DEEP_WORK":
+            base = (
+                tasks.get("immediate", [])
+                + tasks.get("critical", [])
+                + tasks.get("standard", [])
+                + tasks.get("funnel_immediate", [])
+                + tasks.get("funnel_recent", [])
+            )
+            return [t for t in base if "#deep" in t.lower()]
+        return []
+
+    for s in slots:
+        sid = str(s.get("id", "")).strip()
+        kind = str(s.get("kind", "")).strip()
+        if not sid or sid in slot_to_task:
+            continue
+
+        for cand in pool_for_kind(kind):
+            if cand in used_tasks:
+                continue
+            # Deep Work gate (belt + suspenders)
+            if kind == "DEEP_WORK" and "#deep" not in cand.lower():
+                continue
+            slot_to_task[sid] = cand
+            used_tasks.add(cand)
+            break
+
+    # --- 3) Apply into placeholders in traversal order ---
+    PLACEHOLDER_LINE = "  - "
+
     out_lines: List[str] = []
     current_kind: Optional[str] = None
     kind_counters: Dict[str, int] = {}
 
+    label_to_kind = {
+        "Deep Work (max 1 task)": "DEEP_WORK",
+        "Admin AM (email/ops)": "ADMIN_AM",
+        "Admin PM (wrap-up)": "ADMIN_PM",
+        "Social (post + engage)": "SOCIAL_POST",
+        "Social (commenting + replies)": "SOCIAL_REPLIES",
+    }
+
     for ln in atlas_block.splitlines():
-        m = re.match(r"^-\s+(\d{4})\s*-\s*(\d{4}):\s+(.*)$", ln)
-        if m:
-            label = m.group(3)
-            label_to_kind = {
-                "Deep Work (max 1 task)": "DEEP_WORK",
-                "Admin AM (email/ops)": "ADMIN_AM",
-                "Admin PM (wrap-up)": "ADMIN_PM",
-                "Social (post + engage)": "SOCIAL_POST",
-                "Social (commenting + replies)": "SOCIAL_REPLIES",
-            }
-            current_kind = label_to_kind.get(label, None)
+        # Quick wins header example: "- 1430 - 1530: 4 units"
+        if ln.startswith("- ") and re.search(r"\bunit[s]?\b", ln, re.IGNORECASE):
+            current_kind = "QUICK_WINS"
             out_lines.append(ln)
             continue
 
-        if ln.startswith("- ") and ":" in ln and " units" in ln:
-            current_kind = "QUICK_WINS"
+        m = re.match(r"^-\s+(\d{4})\s*-\s*(\d{4}):\s+(.*)$", ln)
+        if m:
+            current_kind = label_to_kind.get(m.group(3), None)
             out_lines.append(ln)
             continue
 
@@ -761,21 +927,18 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict) -> str:
             kind_counters[kind] = kind_counters.get(kind, 0) + 1
             slot_id = f"{kind}_{kind_counters[kind]}"
             task = slot_to_task.get(slot_id, "")
-            if task:
-                out_lines.append(f"  - {task}")
-            else:
-                out_lines.append(PLACEHOLDER_LINE)
+            out_lines.append(f"  - {task}" if task else PLACEHOLDER_LINE)
             continue
 
         out_lines.append(ln)
 
     return "\n".join(out_lines)
 
-
 def run_ollama_json(model: str, payload: Dict) -> Dict:
     """Run `ollama run <model>` and parse the returned JSON.
 
-    This expects the model to output JSON only.
+    This expects the model to output JSON only, but we defensively
+    extract the first {...} block in case the model adds stray text.
     """
     prompt = json.dumps(payload, ensure_ascii=False)
     proc = subprocess.run(
@@ -788,14 +951,19 @@ def run_ollama_json(model: str, payload: Dict) -> Dict:
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "ollama run failed")
 
-    # Best-effort: strip leading/trailing whitespace
-    out = proc.stdout.strip()
+    # ✅ Put your extraction snippet RIGHT HERE
+    out = proc.stdout
+    start = out.find("{")
+    end = out.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        out = out[start:end+1].strip()
+    else:
+        out = out.strip()
+
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
         raise ValueError(f"Model did not return valid JSON: {e}\n---\n{out[:4000]}")
-
-
 # =========================
 # Main
 # =========================
@@ -890,12 +1058,13 @@ def main() -> int:
     if args.ollama_fill:
         req = build_fill_request(atlas_block)
         plan = run_ollama_json(args.ollama_fill, req)
-        atlas_block = apply_fill_plan(atlas_block, plan)
+        atlas_block = apply_fill_plan(atlas_block, plan, req)  # ← Pass req for auto-fill
 
     if args.apply_fill_json:
         plan_path = Path(args.apply_fill_json).expanduser()
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        atlas_block = apply_fill_plan(atlas_block, plan)
+        req = build_fill_request(atlas_block)  # ← Build request
+        atlas_block = apply_fill_plan(atlas_block, plan, req)  # ← Pass req
 
     if args.stdout:
         print(atlas_block)
