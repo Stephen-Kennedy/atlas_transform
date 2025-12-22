@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ATLAS Transform v2.2
+"""ATLAS Transform v2.3
 ======================
 
 Generates a structured ATLAS block in an Obsidian daily note.
@@ -224,8 +224,10 @@ DUE_RE = re.compile(r"📅\s*(\d{4}-\d{2}-\d{2})")
 TASK_ANY_INCOMPLETE_RE = re.compile(r"^\s*(?:>\s*)*[-*+]\s*\[(?!x|X).?\]\s+(.+)$")
 ARCHIVE_PATH_RE = re.compile(r"(^|/)(?:_archive|archive)(/|$)", re.IGNORECASE)
 
+
 def is_archived_path(p: Path) -> bool:
     return ARCHIVE_PATH_RE.search(p.as_posix()) is not None
+
 
 def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_archived: bool = True) -> List[str]:
     """
@@ -239,7 +241,7 @@ def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_arc
     Returns normalized task lines in the form: "- [ ] <content>" so existing extractors can parse them.
     """
     out: List[str] = []
-    seen: set = set()
+    seen: set[str] = set()
 
     for src in sources:
         base = (vault_root / src).expanduser().resolve()
@@ -258,7 +260,7 @@ def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_arc
                 continue
 
             try:
-                lines = md.read_text(encoding="utf-8").splitlines()
+                lines = md.read_text(encoding="utf-8", errors="replace").splitlines()
             except Exception:
                 continue
 
@@ -277,6 +279,13 @@ def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_arc
                 if not DUE_RE.search(task_text):
                     continue
 
+                # Append a vault-relative Obsidian link back to the source note
+                try:
+                    rel_note = md.relative_to(vault_root).with_suffix("").as_posix()
+                    task_text = f"{task_text} ⤴ [[{rel_note}|source]]"
+                except Exception:
+                    pass
+
                 norm = f"- [ ] {task_text}"
                 if norm in seen:
                     continue
@@ -285,7 +294,8 @@ def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_arc
 
     return out
 
-def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
+
+def extract_tasks(raw: str, today: date, source_link: str = "") -> Tuple[List[Task], int]:
     tasks: List[Task] = []
     active_count = 0
 
@@ -295,21 +305,39 @@ def extract_tasks(raw: str, today: date) -> Tuple[List[Task], int]:
         if not TASK_INCOMPLETE_RE.match(line):
             continue
 
-        active_count += 1
-        display_raw = preserve_display_text(strip_checkbox_prefix(line))
-        is_deep = bool(re.search(r"(?i)\B#deep\b", display_raw))
-
         dm = DUE_RE.search(line)
         if not dm:
             continue
+
+        active_count += 1
+        display_raw = preserve_display_text(strip_checkbox_prefix(line))
+
+        # Add a default backlink for the current source (daily note / scratchpad),
+        # unless a backlink is already present (e.g., from vault-scanned tasks).
+        if source_link and "⤴ [[" not in display_raw:
+            display_raw = f"{display_raw} ⤴ {source_link}"
+
+        is_deep = bool(re.search(r"(?i)\B#deep\b", display_raw))
+
         try:
             due = parse_iso_date(dm.group(1))
         except ValueError:
             continue
+
         overdue_days = (today - due).days
         tasks.append(Task(display=display_raw, due=due, overdue_days=overdue_days, is_deep=is_deep))
 
-    return tasks, active_count
+    # De-dupe tasks (keep the “most urgent” version if duplicates exist)
+    seen = set()
+    uniq: List[Task] = []
+    for t in sorted(tasks, key=lambda x: (-x.overdue_days, x.due, x.display)):
+        key = task_base_key(t.display)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(t)
+
+    return uniq, active_count
 
 
 def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
@@ -321,32 +349,44 @@ def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
         if not s:
             continue
 
+        # Track "# Funnel" section boundaries
         if re.match(r"^#\s+Funnel\b", s, flags=re.IGNORECASE):
             in_funnel_section = True
             continue
         if in_funnel_section and s.startswith("#") and not re.match(r"^#\s+Funnel\b", s, flags=re.IGNORECASE):
             in_funnel_section = False
 
+        # Candidate if explicitly tagged quickcap OR inside Funnel section
         is_candidate = ("#quickcap" in s) or in_funnel_section
         if not is_candidate:
             continue
 
+        # Must be an incomplete checkbox line
         if TASK_COMPLETE_RE.match(s):
             continue
         if not re.match(r"^\s*-\s*\[\s*\]\s+", line):
             continue
 
         clean = preserve_display_text(strip_checkbox_prefix(line))
+
+        # Funnel is CAPTURE ONLY: exclude anything that has a due date
+        if DUE_RE.search(clean):
+            continue
+
+        # Require a capture date somewhere in the line
         iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", clean)
         if not iso:
             continue
+
         try:
             item_date = parse_iso_date(iso.group(1))
         except ValueError:
             continue
+
         age_days = (today - item_date).days
         items.append(FunnelItem(display=clean, item_date=item_date, age_days=age_days))
 
+    # De-dupe
     seen = set()
     uniq: List[FunnelItem] = []
     for it in items:
@@ -436,6 +476,7 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
     blocks: List[Block] = []
     remaining = list(free_windows)
 
+    # Deep Work: choose 120, else 90, else 60 in largest window
     for mins in (120, 90, 60):
         slot = choose_slot(remaining, mins, prefer="largest")
         if slot:
@@ -444,18 +485,21 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
             remaining = subtract_interval(remaining, st, en)
             break
 
+    # Admin AM: earliest 60
     slot = choose_slot(remaining, 60, prefer="earliest")
     if slot:
         st, en = slot
         blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=2))
         remaining = subtract_interval(remaining, st, en)
 
+    # Admin PM: latest 60
     slot = choose_slot(remaining, 60, prefer="latest")
     if slot:
         st, en = slot
         blocks.append(Block(st, en, kind="ADMIN_PM", max_tasks=2))
         remaining = subtract_interval(remaining, st, en)
 
+    # Social slots only if there exists at least one 60-min free window in original free_windows
     has_60 = any(w.minutes >= 60 for w in free_windows)
     if has_60:
         slot = choose_slot(remaining, 30, prefer="earliest")
@@ -463,6 +507,7 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
             st, en = slot
             blocks.append(Block(st, en, kind="SOCIAL_POST"))
             remaining = subtract_interval(remaining, st, en)
+
         slot = choose_slot(remaining, 30, prefer="latest")
         if slot:
             st, en = slot
@@ -488,12 +533,20 @@ def make_quick_wins_blocks(remaining: List[FreeWindow]) -> List[Block]:
 # Tier tasks + funnel
 # =========================
 
-def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
+def tier_tasks(tasks: List[Task], stale_overdue_days: int = 30) -> Tuple[List[Task], List[Task], List[Task], List[Task]]:
     imm: List[Task] = []
     crit: List[Task] = []
     std: List[Task] = []
+    stale: List[Task] = []
+
     for t in tasks:
         od = t.overdue_days
+
+        # Stale = overdue beyond threshold
+        if od > stale_overdue_days:
+            stale.append(t)
+            continue
+
         if od > 7 or od == 0:
             imm.append(t)
         elif 3 <= od <= 7:
@@ -504,7 +557,9 @@ def tier_tasks(tasks: List[Task]) -> Tuple[List[Task], List[Task], List[Task]]:
     imm.sort(key=lambda x: (-x.overdue_days, x.due))
     crit.sort(key=lambda x: (-x.overdue_days, x.due))
     std.sort(key=lambda x: (abs(x.overdue_days), x.due))
-    return imm, crit, std
+    stale.sort(key=lambda x: (-x.overdue_days, x.due))
+
+    return imm, crit, std, stale
 
 
 def bucket_funnel(items: List[FunnelItem]) -> Tuple[List[FunnelItem], List[FunnelItem]]:
@@ -556,6 +611,7 @@ def render_atlas_block(
     imm: List[Task],
     crit: List[Task],
     std: List[Task],
+    stale: List[Task],
     active_task_count: int,
     funnel_immediate: List[FunnelItem],
     funnel_recent: List[FunnelItem],
@@ -574,7 +630,6 @@ def render_atlas_block(
     lines.append("")
 
     lines.append("**🧱 PRE-PLACED BLOCKS:**")
-
     REQUIRED = ["DEEP_WORK", "ADMIN_AM", "SOCIAL_POST", "SOCIAL_REPLIES", "ADMIN_PM"]
 
     placed_by_kind: Dict[str, Block] = {}
@@ -583,9 +638,11 @@ def render_atlas_block(
             raise ValueError(f"Duplicate block kind placed: {b.kind}")
         placed_by_kind[b.kind] = b
 
-    # If there are NO #deep tasks at all, we hard-freeze the Deep Work placeholder.
-    # This prevents the model from stuffing random overdue items into Deep Work.
-    has_deep_tasks = any(t.is_deep for t in (imm + crit + std))
+    has_deep_tasks = any(t.is_deep for t in (imm + crit + std + stale))
+
+    # Placeholder format: checklist
+    def ph() -> str:
+        return "  - [ ] "
 
     for kind in REQUIRED:
         label = _block_label(kind)
@@ -603,7 +660,7 @@ def render_atlas_block(
                 continue
 
             for _ in range(b.placeholder_count()):
-                lines.append("  - ")
+                lines.append(ph())
         else:
             lines.append(f"- {label}")
             if kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
@@ -615,22 +672,20 @@ def render_atlas_block(
 
             default_placeholders = 1 if kind == "DEEP_WORK" else 3
             for _ in range(default_placeholders):
-                lines.append("  - ")
+                lines.append(ph())
 
     lines.append("")
-
     lines.append("**⚡ QUICK WINS CAPACITY (15-min units):**")
     if not quick_wins_blocks:
         lines.append("- (manual pick): 1 unit")
-        lines.append("  - ")
+        lines.append(ph())
     else:
         for qb in quick_wins_blocks:
             lines.append(f"- {min_to_hhmm(qb.start_min)} - {min_to_hhmm(qb.end_min)}: {qb.capacity_units} units")
             for _ in range(qb.capacity_units):
-                lines.append("  - ")
+                lines.append(ph())
 
     lines.append("")
-
     lines.append("### Focus")
     lines.append("")
     lines.append("**🎯 TASK PRIORITIES:**")
@@ -644,13 +699,14 @@ def render_atlas_block(
             lines.append(f"- {t.display} – {overdue_label(t.overdue_days)}")
         lines.append("")
 
-    render_tier("**IMMEDIATE (Overdue >7 days OR Due Today):**", imm)
-    render_tier("**CRITICAL (Overdue 3–7 days):**", crit)
-    render_tier("**STANDARD (Overdue 1–2 days OR Due within 3 days):**", std)
+    # Neutral headings (don’t “promise” ranges)
+    render_tier("**IMMEDIATE:**", imm)
+    render_tier("**CRITICAL:**", crit)
+    render_tier("**STANDARD:**", std)
+    render_tier("**COLD STORAGE:**", stale)
 
     lines.append(f"**Active task count:** {active_task_count}")
     lines.append("")
-
     lines.append("**📥 FUNNEL:**")
     lines.append("")
 
@@ -674,6 +730,55 @@ def render_atlas_block(
 
 
 # =========================
+# Shutdown template (inserted AFTER ATLAS block in the note)
+# =========================
+
+SHUTDOWN_HEADER = "### Shutdown"
+SHUTDOWN_TEMPLATE = """### Shutdown
+
+**✅ Wins (3 bullets):**
+- 
+- 
+- 
+
+**🧹 Close the loops:**
+- [ ] Inbox zero-ish (email + messages): triage, defer, delegate
+- [ ] Update task statuses (check off / reschedule / add due dates)
+- [ ] Capture new inputs → Funnel (#quickcap)
+
+**🧠 Tomorrow’s first move:**
+- [ ] Identify the ONE Deep Work task for tomorrow (must have #deep)
+- [ ] If blocked: write the next physical action + who/what is needed
+
+**⏱️ Meetings sanity check:**
+- [ ] Any meetings that ran long / were missing? Note adjustments.
+
+**🧾 End-of-day note:**
+- 
+"""
+
+
+def ensure_shutdown_after_atlas(note_text: str) -> str:
+    """
+    Ensures the Shutdown section exists immediately AFTER <!-- ATLAS:END -->.
+    Important: Shutdown lives OUTSIDE the ATLAS replace regex so it persists across runs.
+    """
+    if SHUTDOWN_HEADER in note_text:
+        return note_text
+
+    m = ATLAS_BLOCK_RE.search(note_text)
+    if not m:
+        # No ATLAS block? Append shutdown at end.
+        return note_text.rstrip() + "\n\n" + SHUTDOWN_TEMPLATE + "\n"
+
+    end_idx = m.end()
+    before = note_text[:end_idx].rstrip()
+    after = note_text[end_idx:].lstrip("\n")
+
+    return before + "\n\n" + SHUTDOWN_TEMPLATE.rstrip() + "\n\n" + after
+
+
+# =========================
 # Obsidian IO: replace ATLAS block
 # =========================
 
@@ -682,56 +787,73 @@ ATLAS_BLOCK_RE = re.compile(r"(?s)<!--\s*ATLAS:START\s*-->.*?<!--\s*ATLAS:END\s*
 
 def replace_atlas_block(note_text: str, new_block: str) -> str:
     if ATLAS_BLOCK_RE.search(note_text):
-        return ATLAS_BLOCK_RE.sub(new_block, note_text, count=1)
-    return note_text.rstrip() + "\n\n" + new_block + "\n"
+        out = ATLAS_BLOCK_RE.sub(new_block, note_text, count=1)
+    else:
+        out = note_text.rstrip() + "\n\n" + new_block + "\n"
+    return ensure_shutdown_after_atlas(out)
 
 
 # =========================
-# JSON fill workflow
+# JSON fill workflow helpers
 # =========================
 
-PLACEHOLDER_LINE = "  - "
+SOURCE_LINK_RE = re.compile(r"\s+⤴\s+\[\[.*?\]\]\s*$")
+TRAILING_STATUS_RE = re.compile(
+    r"\s+–\s+(?:\d+\s+days\s+overdue|Due today|Due in\s+\d+\s+days|\d+\s+days\s+old|Captured today)\s*$",
+    re.IGNORECASE,
+)
+OVERDUE_DAYS_RE = re.compile(r"–\s+(\d+)\s+days\s+overdue\b", re.IGNORECASE)
+
+HIGH_SIGNAL_TERMS = [
+    "#tforge", "#todo", "#bocc",
+    "grant", "contract", "mou", "agenda",
+    "procurement", "legal", "budget", "sole source",
+    "rfp", "rfq", "bid", "bocc",
+]
 
 
-def _atlas_block_only(text: str) -> str:
-    m = ATLAS_BLOCK_RE.search(text)
-    if not m:
-        raise ValueError("No ATLAS block found")
-    return m.group(0)
+def task_base_key(task_str: str) -> str:
+    s = task_str.strip()
+    s = SOURCE_LINK_RE.sub("", s)
+    s = TRAILING_STATUS_RE.sub("", s)
+    return s.strip().lower()
 
-def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Dict:
-    """
-    Build the JSON payload to send to Ollama.
 
-    Output shape matches the Modelfile expectations:
-    {
-      "atlas": {"date": "YYYY-MM-DD"},
-      "slots": [{"id": "...", "kind": "ADMIN_AM"}, ...],
-      "tasks": {
-        "immediate": [...],
-        "critical": [...],
-        "standard": [...],
-        "funnel_immediate": [...],
-        "funnel_recent": [...]
-      }
-    }
-    """
+def is_high_signal(task_str: str) -> bool:
+    s = task_str.lower()
+    return any(term.lower() in s for term in HIGH_SIGNAL_TERMS)
+
+
+def apply_overdue_cap(tasks: Dict[str, List[str]], max_overdue_days: int) -> Dict[str, List[str]]:
+    if max_overdue_days <= 0:
+        return tasks  # disabled
+
+    out = {k: [] for k in tasks.keys()}
+    for bucket, items in tasks.items():
+        for t in items:
+            m = OVERDUE_DAYS_RE.search(t)
+            if m:
+                od = int(m.group(1))
+                if od > max_overdue_days and not is_high_signal(t):
+                    continue
+            out[bucket].append(t)
+    return out
+
+
+def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None, max_overdue_days: int = 180) -> Dict:
     lines = atlas_block.splitlines()
 
-    # -------------------------
-    # 1) Determine date
-    # -------------------------
+    # Date
     if not atlas_date:
         m = re.search(r"##\s+ATLAS Focus Plan\s+\((\d{4}-\d{2}-\d{2})\)", atlas_block)
         atlas_date = m.group(1) if m else ""
 
-    # -------------------------
-    # 2) Parse tasks by headings
-    # -------------------------
+    # Tasks
     tasks = {
         "immediate": [],
         "critical": [],
         "standard": [],
+        "cold_storage": [],
         "funnel_immediate": [],
         "funnel_recent": [],
     }
@@ -750,39 +872,48 @@ def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Di
 
         s = ln.strip()
 
-        # Tier headings
+        # Task buckets
         if s.startswith("**IMMEDIATE"):
-            bucket = "immediate"
-            continue
+            bucket = "immediate"; continue
         if s.startswith("**CRITICAL"):
-            bucket = "critical"
-            continue
+            bucket = "critical"; continue
         if s.startswith("**STANDARD"):
-            bucket = "standard"
-            continue
+            bucket = "standard"; continue
+        if s.startswith("**COLD STORAGE"):
+            bucket = "cold_storage"; continue
 
-        # Funnel headings
+        # Funnel buckets
         if s.startswith("**Items needing immediate processing"):
-            bucket = "funnel_immediate"
-            continue
+            bucket = "funnel_immediate"; continue
         if s.startswith("**Recent items"):
-            bucket = "funnel_recent"
-            continue
+            bucket = "funnel_recent"; continue
 
-        # Stop collecting on counts/headings we don't want
+        # Stop collecting on counts
         if s.startswith("**Active task count:**") or s.startswith("**Funnel count:**"):
             bucket = None
             continue
 
-        # Collect task lines (verbatim minus leading "- ")
+        # Collect items
         if bucket and ln.startswith("- "):
             tasks[bucket].append(ln[2:])
 
-    # -------------------------
-    # 3) Build slots from placeholders
-    # -------------------------
-    PLACEHOLDER = "  - "
+    # Semantic de-dupe across buckets (priority order matters)
+    order = ["immediate", "critical", "standard", "funnel_immediate", "funnel_recent", "cold_storage"]
+    seen_keys = set()
+    deduped = {k: [] for k in tasks.keys()}
+    for k in order:
+        for t in tasks.get(k, []):
+            key = task_base_key(t)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped[k].append(t)
+    tasks = deduped
 
+    # Overdue cap
+    tasks = apply_overdue_cap(tasks, max_overdue_days=max_overdue_days)
+
+    # Slots
     label_to_kind = {
         "Deep Work (max 1 task)": "DEEP_WORK",
         "Admin AM (email/ops)": "ADMIN_AM",
@@ -795,25 +926,24 @@ def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Di
     counters: Dict[str, int] = {}
     slots: List[Dict] = []
 
-    # Header regexes
-    block_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+(.*)$")          # "- 1000 - 1100: Admin AM ..."
-    quickwins_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+\d+\s+units\b")  # "- 1430 - 1530: 4 units"
+    block_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+(.*)$")
+    quickwins_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+\d+\s+units\b")
+
+    # Placeholder: "  - [ ]" with or without trailing text
+    PLACEHOLDER_RE = re.compile(r"^\s*-\s*\[\s*\]\s*$")
 
     for ln in lines:
-        # Detect quick wins header first
         if quickwins_header_re.match(ln.strip()):
             current_kind = "QUICK_WINS"
             continue
 
-        # Detect normal block header
         m = block_header_re.match(ln.strip())
         if m:
             label = m.group(1).strip()
             current_kind = label_to_kind.get(label)
             continue
 
-        # Placeholder lines become slots
-        if ln == PLACEHOLDER:
+        if PLACEHOLDER_RE.match(ln.strip()):
             kind = current_kind or "UNKNOWN"
             counters[kind] = counters.get(kind, 0) + 1
             slots.append({"id": f"{kind}_{counters[kind]}", "kind": kind})
@@ -825,75 +955,28 @@ def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Di
     }
 
 
-def get_priority_pool_for_kind(kind: str, tasks_dict: Dict[str, List[str]]) -> List[str]:
-    """Return the prioritized task list for a given slot kind.
-
-    Used by auto-fill to complete any slots the LLM didn't fill.
-    """
-    if kind in ("ADMIN_AM", "ADMIN_PM"):
-        pool = (
-                tasks_dict.get("immediate", []) +
-                tasks_dict.get("critical", []) +
-                tasks_dict.get("standard", []) +
-                tasks_dict.get("funnel_immediate", []) +
-                tasks_dict.get("funnel_recent", [])
-        )
-    elif kind == "QUICK_WINS":
-        pool = (
-                tasks_dict.get("funnel_immediate", []) +
-                tasks_dict.get("funnel_recent", []) +
-                tasks_dict.get("standard", []) +
-                tasks_dict.get("critical", []) +
-                tasks_dict.get("immediate", [])
-        )
-    elif kind == "DEEP_WORK":
-        all_tasks = (
-                tasks_dict.get("immediate", []) +
-                tasks_dict.get("critical", []) +
-                tasks_dict.get("standard", []) +
-                tasks_dict.get("funnel_immediate", []) +
-                tasks_dict.get("funnel_recent", [])
-        )
-        pool = [t for t in all_tasks if "#deep" in t.lower()]
-    else:
-        pool = []
-    return pool
-
 def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Dict] = None) -> str:
-    """
-    Apply a JSON fill plan to the ATLAS block.
-
-    Expected fill plan shape:
-    {"fills": [{"slot_id": "ADMIN_AM_1", "task": "<verbatim task>"}, ...]}
-
-    Behavior:
-    - Accept only EXACT task matches from request tasks lists.
-    - Enforce no-duplicates.
-    - Enforce Deep Work requires #deep.
-    - After applying valid model fills, Python fills any remaining slots
-      deterministically using the same priority rules.
-    """
-    # Use passed fill_request if provided, otherwise build it
     if fill_request is None:
         fill_request = build_fill_request(atlas_block)
 
     request = fill_request
-
     slots = request.get("slots", [])
     tasks = request.get("tasks", {})
+
     all_allowed = set(
         tasks.get("immediate", [])
         + tasks.get("critical", [])
         + tasks.get("standard", [])
         + tasks.get("funnel_immediate", [])
         + tasks.get("funnel_recent", [])
+        + tasks.get("cold_storage", [])
     )
 
     fills_raw = fill_plan.get("fills", [])
     if not isinstance(fills_raw, list):
         raise ValueError("fill_plan.fills must be a list")
 
-    # --- 1) Validate model-provided fills ---
+    # 1) Validate model fills
     slot_to_task: Dict[str, str] = {}
     used_tasks: set[str] = set()
 
@@ -910,11 +993,10 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Di
             continue
         if slot_id.startswith("DEEP_WORK_") and ("#deep" not in task.lower()):
             continue
-
         slot_to_task[slot_id] = task
         used_tasks.add(task)
 
-    # --- 2) Python fallback: fill remaining slots sequentially ---
+    # 2) Python fallback fills remaining slots
     def pool_for_kind(kind: str) -> List[str]:
         if kind in ("ADMIN_AM", "ADMIN_PM"):
             return (
@@ -923,6 +1005,7 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Di
                 + tasks.get("standard", [])
                 + tasks.get("funnel_immediate", [])
                 + tasks.get("funnel_recent", [])
+                + tasks.get("cold_storage", [])
             )
         if kind == "QUICK_WINS":
             return (
@@ -931,6 +1014,7 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Di
                 + tasks.get("standard", [])
                 + tasks.get("critical", [])
                 + tasks.get("immediate", [])
+                + tasks.get("cold_storage", [])
             )
         if kind == "DEEP_WORK":
             base = (
@@ -939,6 +1023,7 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Di
                 + tasks.get("standard", [])
                 + tasks.get("funnel_immediate", [])
                 + tasks.get("funnel_recent", [])
+                + tasks.get("cold_storage", [])
             )
             return [t for t in base if "#deep" in t.lower()]
         return []
@@ -948,20 +1033,16 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Di
         kind = str(s.get("kind", "")).strip()
         if not sid or sid in slot_to_task:
             continue
-
         for cand in pool_for_kind(kind):
             if cand in used_tasks:
                 continue
-            # Deep Work gate (belt + suspenders)
             if kind == "DEEP_WORK" and "#deep" not in cand.lower():
                 continue
             slot_to_task[sid] = cand
             used_tasks.add(cand)
             break
 
-    # --- 3) Apply into placeholders in traversal order ---
-    PLACEHOLDER_LINE = "  - "
-
+    # 3) Apply into placeholders
     out_lines: List[str] = []
     current_kind: Optional[str] = None
     kind_counters: Dict[str, int] = {}
@@ -974,38 +1055,61 @@ def apply_fill_plan(atlas_block: str, fill_plan: Dict, fill_request: Optional[Di
         "Social (commenting + replies)": "SOCIAL_REPLIES",
     }
 
+    quickwins_header_re = re.compile(r"^-?\s*\d{4}\s*-\s*\d{4}:\s+\d+\s+units\b")
+    block_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+(.*)$")
+
+    # Placeholder lines inside the ATLAS block
+    PLACEHOLDER_RE = re.compile(r"^\s*-\s*\[\s*\]\s*$")
+
     for ln in atlas_block.splitlines():
-        # Quick wins header example: "- 1430 - 1530: 4 units"
+        # QUICK_WINS header
         if ln.startswith("- ") and re.search(r"\bunit[s]?\b", ln, re.IGNORECASE):
             current_kind = "QUICK_WINS"
             out_lines.append(ln)
             continue
 
-        m = re.match(r"^-\s+(\d{4})\s*-\s*(\d{4}):\s+(.*)$", ln)
+        # Block header
+        m = block_header_re.match(ln)
         if m:
-            current_kind = label_to_kind.get(m.group(3), None)
+            label = m.group(1).strip()
+            current_kind = label_to_kind.get(label, None)
             out_lines.append(ln)
             continue
 
-        if ln == PLACEHOLDER_LINE:
+        # Placeholder line
+        if PLACEHOLDER_RE.match(ln.strip()):
             kind = current_kind or "UNKNOWN"
             kind_counters[kind] = kind_counters.get(kind, 0) + 1
             slot_id = f"{kind}_{kind_counters[kind]}"
             task = slot_to_task.get(slot_id, "")
-            out_lines.append(f"  - {task}" if task else PLACEHOLDER_LINE)
+            out_lines.append(f"  - [ ] {task}".rstrip() if task else "  - [ ] ")
             continue
 
         out_lines.append(ln)
 
     return "\n".join(out_lines)
 
-def run_ollama_json(model: str, payload: Dict) -> Dict:
-    """Run `ollama run <model>` and parse the returned JSON.
 
-    This expects the model to output JSON only, but we defensively
-    extract the first {...} block in case the model adds stray text.
-    """
-    prompt = json.dumps(payload, ensure_ascii=False)
+def run_ollama_json(model: str, payload: Dict) -> Dict:
+    """Run `ollama run <model>` and parse the returned JSON."""
+    prompt = (
+        "You are an automated scheduler.\n"
+        "You MUST select tasks from the provided input.\n\n"
+        "Return ONLY valid JSON with this exact shape:\n"
+        '{"fills":[{"slot_id":"<slot>","task":"<exact task string from input.tasks>"}]}\n\n'
+        "STRICT RULES:\n"
+        "- task MUST be a NON-EMPTY string.\n"
+        "- task MUST appear verbatim in input.tasks lists.\n"
+        "- Do NOT invent tasks.\n"
+        "- Do NOT repeat tasks.\n"
+        "- For any slot_id starting with DEEP_WORK_, task MUST contain #deep.\n"
+        "- If no valid task exists for a slot, OMIT that slot entirely.\n"
+        "- It is OK to return fewer fills than slots.\n\n"
+        "Return JSON only. No prose.\n\n"
+        "INPUT:\n"
+        f"{json.dumps(payload, ensure_ascii=False)}\n"
+    )
+
     proc = subprocess.run(
         ["ollama", "run", model],
         input=prompt,
@@ -1013,22 +1117,24 @@ def run_ollama_json(model: str, payload: Dict) -> Dict:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or "ollama run failed")
 
-    # ✅ Put your extraction snippet RIGHT HERE
-    out = proc.stdout
+    out = proc.stdout.strip()
+
+    # Defensive JSON extraction
     start = out.find("{")
     end = out.rfind("}")
     if start != -1 and end != -1 and end > start:
-        out = out[start:end+1].strip()
-    else:
-        out = out.strip()
+        out = out[start:end + 1]
 
     try:
         return json.loads(out)
     except json.JSONDecodeError as e:
         raise ValueError(f"Model did not return valid JSON: {e}\n---\n{out[:4000]}")
+
+
 # =========================
 # Main
 # =========================
@@ -1055,9 +1161,15 @@ def main() -> int:
     ap.add_argument("--export-fill-json", type=str, default="", help="Write fill request JSON to this path.")
     ap.add_argument("--apply-fill-json", type=str, default="", help="Apply fill plan JSON from this path.")
     ap.add_argument("--ollama-fill", type=str, default="", help="Run ollama model (JSON mode) and apply output.")
-
+    ap.add_argument("--max-overdue-days", type=int, default=180,
+                    help="Exclude tasks overdue more than this many days from fill request unless high-signal. Use 0 to disable.")
+    ap.add_argument("--fill-request-json", type=str, default="",
+                    help="Optional: load the exact fill request JSON used to generate the plan.")
     args = ap.parse_args()
 
+    # -------------------------
+    # Resolve date + paths
+    # -------------------------
     forced_today: Optional[date] = None
     if args.date:
         try:
@@ -1074,6 +1186,7 @@ def main() -> int:
         daily_path = daily_dir / f"{d.isoformat()}.md"
 
     scratchpad_path = Path(args.scratchpad).expanduser()
+    vault_root = Path(args.vault_root).expanduser()
 
     daily_text = read_text(daily_path) if daily_path.exists() else ""
     scratch_text = read_text(scratchpad_path) if scratchpad_path.exists() else ""
@@ -1089,28 +1202,75 @@ def main() -> int:
     if not today:
         today = datetime.now().date()
 
+    # -------------------------
+    # Meetings -> free windows
+    # -------------------------
     meetings = clamp_meetings_to_day(extract_meetings_from_daily(daily_text))
-    raw = daily_text + "\n\n" + scratch_text
-
-    # Automatically include vault tasks when generating fill request / running ollama,
-    # or manually enable for normal runs via --scan-vault-tasks
-    scan_needed = bool(args.scan_vault_tasks or args.export_fill_json or args.ollama_fill or args.apply_fill_json)
-    if scan_needed:
-        vault_root = Path(args.vault_root).expanduser()
-        sources = [s.strip() for s in args.task_sources.split(",") if s.strip()]
-        extra_lines = collect_tasks_plugin_lines(vault_root, sources, exclude_archived=True)
-        if extra_lines:
-            raw = raw + "\n\n" + "\n".join(extra_lines)
-
     busy = build_busy_windows(meetings)
     free = invert_busy_to_free(busy)
 
-    tasks, active_count = extract_tasks(raw, today)
-    imm, crit, std = tier_tasks(tasks)
+    # -------------------------
+    # Build backlinks for Daily + Scratchpad
+    # -------------------------
+    try:
+        daily_rel = daily_path.relative_to(vault_root).with_suffix("").as_posix()
+        daily_link = f"[[{daily_rel}|daily]]"
+    except Exception:
+        daily_link = "[[Daily Note|daily]]"
 
-    funnel_items = extract_funnel(raw, today)
+    try:
+        scratch_rel = scratchpad_path.relative_to(vault_root).with_suffix("").as_posix()
+        scratch_link = f"[[{scratch_rel}|scratch]]"
+    except Exception:
+        scratch_link = "[[Scratchpad|scratch]]"
+
+    # -------------------------
+    # Tasks: Daily + Scratchpad
+    # -------------------------
+    tasks_daily, count_daily = extract_tasks(daily_text, today, source_link=daily_link)
+    tasks_scratch, count_scratch = extract_tasks(scratch_text, today, source_link=scratch_link)
+
+    all_tasks: List[Task] = []
+    all_tasks.extend(tasks_daily)
+    all_tasks.extend(tasks_scratch)
+    active_count = count_daily + count_scratch
+
+    # -------------------------
+    # Optional vault scan
+    # -------------------------
+    scan_needed = bool(args.scan_vault_tasks or args.export_fill_json or args.ollama_fill or args.apply_fill_json)
+    if scan_needed:
+        sources = [s.strip() for s in args.task_sources.split(",") if s.strip()]
+        extra_lines = collect_tasks_plugin_lines(vault_root, sources, exclude_archived=True)
+        if extra_lines:
+            extra_raw = "\n".join(extra_lines)
+            tasks_extra, count_extra = extract_tasks(extra_raw, today, source_link="")
+            all_tasks.extend(tasks_extra)
+            active_count += count_extra
+
+    # Final de-dupe across ALL sources
+    seen = set()
+    tasks_uniq: List[Task] = []
+    for t in sorted(all_tasks, key=lambda x: (-x.overdue_days, x.due, x.display)):
+        key = task_base_key(t.display)
+        if key in seen:
+            continue
+        seen.add(key)
+        tasks_uniq.append(t)
+
+    tasks = tasks_uniq
+    imm, crit, std, stale = tier_tasks(tasks)
+
+    # -------------------------
+    # Funnel (capture-only): Daily + Scratchpad combined
+    # -------------------------
+    raw_for_funnel = daily_text + "\n\n" + scratch_text
+    funnel_items = extract_funnel(raw_for_funnel, today)
     funnel_immediate, funnel_recent = bucket_funnel(funnel_items)
 
+    # -------------------------
+    # Build schedule blocks + render
+    # -------------------------
     required_blocks, remaining = place_required_blocks(free)
     quick_wins_blocks = make_quick_wins_blocks(remaining)
 
@@ -1122,6 +1282,7 @@ def main() -> int:
         imm=imm,
         crit=crit,
         std=std,
+        stale=stale,
         active_task_count=active_count,
         funnel_immediate=funnel_immediate,
         funnel_recent=funnel_recent,
@@ -1129,25 +1290,34 @@ def main() -> int:
         funnel_gt7=len(funnel_immediate),
     )
 
-    # If requested, export fill request JSON
+    # -------------------------
+    # Fill workflows
+    # -------------------------
+    req: Optional[Dict] = None
+    if args.fill_request_json:
+        req_path = Path(args.fill_request_json).expanduser()
+        req = json.loads(req_path.read_text(encoding="utf-8"))
+
     if args.export_fill_json:
-        req = build_fill_request(atlas_block)
+        req = build_fill_request(atlas_block, max_overdue_days=args.max_overdue_days)
         outp = Path(args.export_fill_json).expanduser()
         outp.parent.mkdir(parents=True, exist_ok=True)
         outp.write_text(json.dumps(req, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-    # Apply a provided fill plan JSON (or run ollama and apply its JSON)
     if args.ollama_fill:
-        req = build_fill_request(atlas_block)
+        req = build_fill_request(atlas_block, max_overdue_days=args.max_overdue_days)
         plan = run_ollama_json(args.ollama_fill, req)
-        atlas_block = apply_fill_plan(atlas_block, plan, req)  # ← Pass req for auto-fill
+        atlas_block = apply_fill_plan(atlas_block, plan, req)
 
     if args.apply_fill_json:
         plan_path = Path(args.apply_fill_json).expanduser()
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
-        req = build_fill_request(atlas_block)  # ← Build request
-        atlas_block = apply_fill_plan(atlas_block, plan, req)  # ← Pass req
+        req = req or build_fill_request(atlas_block, max_overdue_days=args.max_overdue_days)
+        atlas_block = apply_fill_plan(atlas_block, plan, req)
 
+    # -------------------------
+    # Output vs write
+    # -------------------------
     if args.stdout:
         print(atlas_block)
         return 0
