@@ -177,51 +177,114 @@ TIMEBLOCK_SECTION_RE = re.compile(
     r"(?ims)^\s*###\s+Time\s+Blocking\s*$\n(.*?)(?=^\s*###\s+|\Z)"
 )
 
-
 def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
+    """
+    Extract meetings ONLY from the Daily Note's '### Time Blocking' section.
+
+    Supports lines like:
+    - 0900 - 1000 MEET [[Some Meeting]]
+    - 09:00-10:00 [[Some Meeting]]
+    - [ ] 0900 - 1000 MEET [[Some Meeting]]
+    - [ ] 0900 - 1000 Some Meeting
+    - 0900 - 1000 MEET Some Meeting
+
+    Ignores:
+    - Cancelled checkbox lines like: - [-] 0900 - 1000 ...
+    - Completed checkbox lines like: - [x] 0900 - 1000 ...
+    """
     meetings: List[Meeting] = []
     msec = TIMEBLOCK_SECTION_RE.search(daily_text)
     if not msec:
         return meetings
 
     body = msec.group(1)
+
+    # Optional checkbox prefix at start of a bullet:
+    #   - [ ] ...
+    #   - [x] ...
+    #   - [-] ...   (cancelled)
+    checkbox_prefix_re = re.compile(r"^\s*-\s*\[\s*([xX\-])?\s*\]\s*")
+
+    # Cancelled checkbox marker specifically:
+    cancelled_re = re.compile(r"^\s*-\s*\[\s*-\s*\]\s*", re.IGNORECASE)
+
+    # Time block line matcher (after optional checkbox prefix is removed)
+    timeblock_line_re = re.compile(
+        r"""^\s*-\s*
+            (?P<st>[0-9:]{3,5})\s*-\s*(?P<en>[0-9:]{3,5})
+            \s*(?:(?:MEET)\s*)?
+            (?:\[\[(?P<bracket>.*?)\]\]|(?P<title>.+))\s*$
+        """,
+        re.VERBOSE,
+    )
+
     for line in body.splitlines():
         line = line.rstrip()
         if not line.strip():
             continue
-        m = TIMEBLOCK_LINE_RE.match(line)
+
+        # Skip cancelled time blocks like: - [-] 0900 - 1000 ...
+        if cancelled_re.match(line):
+            continue
+
+        # Normalize: if the line starts with "- [ ]" or "- [x]" etc, remove that prefix
+        # so the remaining text is parsed like a normal timeblock line.
+        if checkbox_prefix_re.match(line):
+            # Only strip if it was actually a checkbox bullet
+            line = checkbox_prefix_re.sub("- ", line, count=1)
+
+        m = timeblock_line_re.match(line)
         if not m:
             continue
+
         st = m.group("st")
         en = m.group("en")
         title = (m.group("bracket") or m.group("title") or "").strip()
         if not title:
             continue
+
         try:
             sm = hhmm_to_min(st)
             em = hhmm_to_min(en)
         except ValueError:
             continue
+
         if em == sm:
             em = sm + DEFAULT_APPT_MINUTES
         if em < sm:
             sm, em = em, sm
+
         meetings.append(Meeting(sm, em, title))
 
     meetings.sort(key=lambda x: (x.start_min, x.end_min, x.title))
     return meetings
 
-
 # =========================
 # Extract: tasks + funnel (Scratchpad + Daily)
 # =========================
 
-TASK_INCOMPLETE_RE = re.compile(r"^\s*-\s*\[\s*\]\s+(.+)$")
-TASK_COMPLETE_RE = re.compile(r"^\s*-\s*\[\s*x\s*\]\s+", re.IGNORECASE)
+# Matches both bullet and non-bullet checkboxes:
+#   - [ ] task
+#   [ ] task
+TASK_INCOMPLETE_RE = re.compile(r"^\s*(?:[-*+]\s*)?\[\s*\]\s+(.+)$")
+
+# Matches both bullet and non-bullet completed checkboxes:
+#   - [x] task
+#   [x] task
+TASK_COMPLETE_RE = re.compile(r"^\s*(?:[-*+]\s*)?\[\s*[xX]\s*\]\s+", re.IGNORECASE)
+
+# Matches both bullet and non-bullet cancelled/deferred style checkboxes:
+#   - [-] task
+#   [-] task
+#   - [/] task
+#   [/] task
+TASK_CANCELLED_RE = re.compile(r"^\s*(?:[-*+]\s*)?\[\s*[-/]\s*\]\s+")
 DUE_RE = re.compile(r"📅\s*(\d{4}-\d{2}-\d{2})")
 
 # More permissive matcher for Tasks-plugin lines found across the vault
-TASK_ANY_INCOMPLETE_RE = re.compile(r"^\s*(?:>\s*)*[-*+]\s*\[(?!x|X).?\]\s+(.+)$")
+TASK_ANY_CHECKBOX_RE = re.compile(
+    r"^\s*(?:>\s*)*[-*+]\s*\[\s*(?P<mark>[^\]]{0,1})\s*\]\s+(?P<body>.+)$"
+)
 ARCHIVE_PATH_RE = re.compile(r"(^|/)(?:_archive|archive)(/|$)", re.IGNORECASE)
 
 
@@ -265,11 +328,20 @@ def collect_tasks_plugin_lines(vault_root: Path, sources: List[str], exclude_arc
                 continue
 
             for ln in lines:
-                m = TASK_ANY_INCOMPLETE_RE.match(ln)
+                m = TASK_ANY_CHECKBOX_RE.match(ln)
                 if not m:
                     continue
 
-                task_text = m.group(1).strip()
+                mark = (m.group("mark") or "").strip()
+                task_text = m.group("body").strip()
+
+                # Exclude done + cancelled styles
+                if mark.lower() == "x" or mark in ("-", "/"):
+                    continue
+
+                # Exclude Tasks-plugin completed marker lines
+                if "✅" in task_text:
+                    continue
 
                 # Skip cancelled tasks
                 if "❌" in task_text:
@@ -301,6 +373,9 @@ def extract_tasks(raw: str, today: date, source_link: str = "") -> Tuple[List[Ta
 
     for line in raw.splitlines():
         if TASK_COMPLETE_RE.match(line):
+            continue
+        # Skip cancelled tasks ([-] or [/]) even if they have due dates
+        if TASK_CANCELLED_RE.match(line):
             continue
         if not TASK_INCOMPLETE_RE.match(line):
             continue
