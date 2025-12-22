@@ -371,20 +371,40 @@ def extract_tasks(raw: str, today: date, source_link: str = "") -> Tuple[List[Ta
     tasks: List[Task] = []
     active_count = 0
 
+    # Text cues that should never be scheduled as active work
+    CANCEL_WORD_RE = re.compile(r"\b(cancelled|canceled|cancel)\b", re.IGNORECASE)
+
     for line in raw.splitlines():
-        if TASK_COMPLETE_RE.match(line):
-            continue
-        # Skip cancelled tasks ([-] or [/]) even if they have due dates
-        if TASK_CANCELLED_RE.match(line):
-            continue
-        if not TASK_INCOMPLETE_RE.match(line):
+        s = line.strip()
+        if not s:
             continue
 
-        dm = DUE_RE.search(line)
+        # 1) Hard exclusions: completed/cancelled signals (regardless of checkbox state)
+        #    - Tasks plugin often appends ✅ even if checkbox isn't [x] in the source you scanned
+        if "✅" in s:
+            continue
+        if "❌" in s:
+            continue
+        if CANCEL_WORD_RE.search(s):
+            continue
+
+        # 2) Exclude explicit checkbox states
+        if TASK_COMPLETE_RE.match(s):
+            continue
+        if TASK_CANCELLED_RE.match(s):
+            continue
+
+        # 3) Only include incomplete checkbox tasks
+        if not TASK_INCOMPLETE_RE.match(s):
+            continue
+
+        # 4) Must have a due date
+        dm = DUE_RE.search(s)
         if not dm:
             continue
 
         active_count += 1
+
         display_raw = preserve_display_text(strip_checkbox_prefix(line))
 
         # Add a default backlink for the current source (daily note / scratchpad),
@@ -413,7 +433,6 @@ def extract_tasks(raw: str, today: date, source_link: str = "") -> Tuple[List[Ta
         uniq.append(t)
 
     return uniq, active_count
-
 
 def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
     items: List[FunnelItem] = []
