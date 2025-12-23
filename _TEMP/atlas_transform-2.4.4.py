@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ATLAS Transform v3.0.6
+"""ATLAS Transform v2.4.4
 ========================
 
 Generates and writes a structured ATLAS block in an Obsidian Daily Note.
@@ -167,12 +167,12 @@ class Block:
         return max(0, self.end_min - self.start_min)
 
     def placeholder_count(self) -> int:
-        if self.kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
+        # Blocks that intentionally have no task placeholders (buffer time)
+        if self.kind in ("SOCIAL_POST", "SOCIAL_REPLIES", "ADMIN_AM", "ADMIN_PM"):
             return 0
         if self.kind == "DEEP_WORK":
             return 1
         return max(1, self.max_tasks)
-
 
 # =========================
 # Extract: meetings (Daily Note only, Time Blocking section only)
@@ -526,8 +526,8 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
     blocks: List[Block] = []
     remaining = list(free_windows)
 
-    # Deep work: preferred 120, fallback 60 (contiguous), choose from largest window
-    for mins in (120, 60):
+    # Deep work: try 120, then 90, then 60 in the largest window
+    for mins in (120, 90, 60):
         slot = choose_slot(remaining, mins, prefer="largest")
         if slot:
             st, en = slot
@@ -535,20 +535,19 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
             remaining = subtract_interval(remaining, st, en)
             break
 
-    # Admin PM: latest 30 (always best-effort)
+    # Admin AM: earliest 30
+    slot = choose_slot(remaining, 30, prefer="earliest")
+    if slot:
+        st, en = slot
+        blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=0))
+        remaining = subtract_interval(remaining, st, en)
+
+    # Admin PM: latest 30
     slot = choose_slot(remaining, 30, prefer="latest")
     if slot:
         st, en = slot
         blocks.append(Block(st, en, kind="ADMIN_PM", max_tasks=0))
         remaining = subtract_interval(remaining, st, en)
-
-    # Admin AM: earliest 30, only if it fits before noon; if not, skip (no carryover)
-    slot = choose_slot(remaining, 30, prefer="earliest")
-    if slot:
-        st, en = slot
-        if en <= hhmm_to_min("12:00"):
-            blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=0))
-            remaining = subtract_interval(remaining, st, en)
 
     # Social only if there is at least one 60-minute window in the original day
     has_60 = any(w.minutes >= 60 for w in free_windows)
@@ -579,298 +578,6 @@ def make_quick_wins_blocks(remaining: List[FreeWindow]) -> List[Block]:
         q.append(Block(w.start_min, w.end_min, kind="QUICK_WINS", capacity_units=units))
     return q
 
-
-
-
-# =========================
-# Work-mode tags + slotting
-# =========================
-
-MODE_TAGS = ["#deep", "#focus", "#shallow", "#admin", "#call", "#quickcap"]
-
-def has_any_mode_tag(s: str) -> bool:
-    return any(t in s for t in MODE_TAGS)
-
-def is_quickcap(s: str) -> bool:
-    return "#quickcap" in s
-
-def strip_task_to_match(s: str) -> str:
-    """Normalize a task display for matching."""
-    s2 = re.sub(r"\s+⤴\s+\[\[.*?\]\]\s*$", "", s).strip()
-    s2 = re.sub(r"\s+📅\s+\d{4}-\d{2}-\d{2}\b.*$", "", s2).strip()
-    return s2
-
-
-def remove_checkbox_prefix(line: str) -> str:
-    """Remove leading task checkbox markup like '- [ ] ' or '- [x] '."""
-    s = line.lstrip()
-    # Common Markdown task formats
-    for prefix in ('- [ ] ', '- [x] ', '- [X] ', '* [ ] ', '* [x] ', '* [X] '):
-        if s.startswith(prefix):
-            return s[len(prefix):]
-    # Handle cases like '- [ ]' with no trailing space
-    for prefix in ('- [ ]', '- [x]', '- [X]', '* [ ]', '* [x]', '* [X]'):
-        if s.startswith(prefix):
-            rest = s[len(prefix):]
-            return rest.lstrip()
-    return s
-
-def build_focus_slots(remaining: List[FreeWindow]) -> List[Block]:
-    """Create 30-minute focus slots from remaining free windows."""
-    slots: List[Block] = []
-    for w in remaining:
-        st = w.start_min
-        while st + 30 <= w.end_min:
-            slots.append(Block(st, st + 30, kind="FOCUS_SLOT", max_tasks=1))
-            st += 30
-    return slots
-
-def slot_tag(today: date, label: str) -> str:
-    # Example: #atlas/slot/2025-12-22/0830-0900
-    return f"#atlas/slot/{today.isoformat()}/{label}"
-
-def block_label(b: Block) -> str:
-    return f"{min_to_hhmm(b.start_min)}-{min_to_hhmm(b.end_min)}"
-
-def render_slot_section(b: Block, *, title: str, tag: str) -> List[str]:
-    lines: List[str] = []
-    lines.append(f"#### {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {title}")
-    lines.append("```tasks")
-    lines.append(f"tag includes {tag}")
-    lines.append("not done")
-    lines.append("short mode")
-    lines.append("limit 20")
-    lines.append("```")
-    lines.append("")
-    return lines
-
-
-def render_work_block_section(start_min: int, end_min: int, *, title: str, tags: List[str], limit: int) -> List[str]:
-    """Render a grouped Work Block that pulls tasks from multiple slot tags (no backfill).
-
-    Each task is still tagged to a specific 30-minute slot in its source note; this view just
-    groups consecutive slots for readability.
-    """
-    lines: List[str] = []
-    lines.append(f"#### {min_to_hhmm(start_min)} - {min_to_hhmm(end_min)}: {title}")
-    lines.append("```tasks")
-    if tags:
-        conds = [f"(tag includes {t})" for t in tags]
-        lines.append("(" + " OR ".join(conds) + ")")
-    else:
-        # Shouldn't happen, but keep query valid.
-        lines.append("tag includes #atlas/slot/none")
-    lines.append("not done")
-    lines.append("short mode")
-    lines.append(f"limit {limit}")
-    lines.append("```")
-    lines.append("")
-    return lines
-
-def render_buffer_section(b: Block, title: str, note: str = "") -> List[str]:
-    lines = [f"#### {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {title}"]
-    if note:
-        lines.append(note)
-    lines.append("")
-    return lines
-
-def build_assignments(
-    today: date,
-    required_blocks: List[Block],
-    focus_slots: List[Block],
-    *,
-    imm: List[Task],
-    crit: List[Task],
-    std: List[Task],
-    stale: List[Task],
-) -> Dict[str, List[str]]:
-    """Return mapping: task_display -> list of tags to apply (#atlas/today, #atlas/focus/date, #atlas/slot/...)."""
-    assignments: Dict[str, List[str]] = {}
-    today_tag = FOCUS_TODAY_TAG
-    date_tag = FOCUS_DATE_TAG_FMT.format(date=today.isoformat())
-
-    ordered = [*imm, *crit, *std, *stale]
-
-    def eligible_for_focus(t: Task) -> bool:
-        d = t.display
-        if is_quickcap(d):
-            return False
-        # deep-tagged tasks should not be slotted into focus unless due today/overdue
-        if "#deep" in d and t.overdue_days <= -1:
-            return False
-        return True
-
-    focus_candidates = [t for t in ordered if eligible_for_focus(t)]
-
-    # Deep work: one task max, must be #deep
-    deep_blocks = [b for b in required_blocks if b.kind == "DEEP_WORK"]
-    if deep_blocks:
-        # Prefer #deep; if none exist, optionally fall back to #focus (still treated as a deep slot for today).
-        deep_task = next((t for t in ordered if "#deep" in t.display), None)
-        if not deep_task:
-            deep_task = next((t for t in ordered if "#focus" in t.display), None)
-        if deep_task:
-            tag = slot_tag(today, "deep")
-            assignments[deep_task.display] = [today_tag, date_tag, tag]
-
-    used = set(assignments.keys())
-    for b in focus_slots:
-        t = next((t for t in focus_candidates if t.display not in used), None)
-        if not t:
-            break
-        used.add(t.display)
-        tag = slot_tag(today, block_label(b).replace(":", ""))
-        assignments[t.display] = [today_tag, date_tag, tag]
-
-    return assignments
-
-def tag_assignments_in_source_notes(vault_root: Path, assignments: Dict[str, List[str]]) -> int:
-    """Apply tags to source tasks. Matches by normalized task body."""
-    by_src: Dict[str, List[Tuple[str, List[str]]]] = {}
-    for disp, tags in assignments.items():
-        src = extract_source_note_from_task_display(disp)
-        by_src.setdefault(src, []).append((disp, tags))
-
-    changed_files = 0
-    for src_note, items in by_src.items():
-        src_path = vault_root / (src_note + ".md")
-        if not src_path.exists():
-            continue
-        try:
-            original = src_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except Exception:
-            continue
-
-        targets = []
-        for disp, tags in items:
-            body = strip_task_to_match(remove_checkbox_prefix(disp)).strip()
-            targets.append((body, tags))
-
-        new_lines = []
-        changed = False
-        for ln in original:
-            out_ln = ln
-            s = ln.strip()
-            if TASK_INCOMPLETE_RE.match(s):
-                raw_body = strip_task_to_match(remove_checkbox_prefix(s)).strip()
-                for body, tags in targets:
-                    if raw_body == body:
-                        for tg in tags:
-                            if tg and tg not in out_ln:
-                                out_ln = out_ln.rstrip() + " " + tg
-                                changed = True
-                        break
-            new_lines.append(out_ln)
-
-        if changed:
-            try:
-                src_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                changed_files += 1
-            except Exception:
-                pass
-    return changed_files
-
-# =========================
-# Ollama tagging (optional)
-# =========================
-
-def _task_body_for_llm(text: str) -> str:
-    body = remove_checkbox_prefix(text)
-    body = re.sub(r"\s+📅\s+\d{4}-\d{2}-\d{2}.*$", "", body).strip()
-    body = re.sub(r"\s+⤴\s+\[\[.*?\]\]\s*$", "", body).strip()
-    return body
-
-def _ollama_classify_task(model: str, task_text: str) -> str:
-    """Return one of MODE_TAGS or empty string."""
-    import subprocess
-    prompt = (
-        "Classify the task into exactly ONE of these tags: "
-        "#deep, #focus, #shallow, #admin, #call, #quickcap.\n"
-        "Return ONLY the tag.\n"
-        f"Task: {task_text.strip()}\n"
-        "Tag:"
-    )
-    try:
-        proc = subprocess.run(
-            ["ollama", "run", model],
-            input=prompt,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        out = (proc.stdout or "").strip()
-    except Exception:
-        return ""
-    if out in MODE_TAGS:
-        return out
-    for t in MODE_TAGS:
-        if t in out.split():
-            return t
-    for t in MODE_TAGS:
-        if t in out:
-            return t
-    return ""
-
-def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: str) -> int:
-    """Tag tasks in source notes with a work-mode tag if none of the six tags exist."""
-    decide: Dict[str, str] = {}
-    for t in tasks:
-        if has_any_mode_tag(t.display):
-            continue
-        body = _task_body_for_llm(t.display)
-        key = strip_task_to_match(body)
-        if key in decide:
-            continue
-        tag = _ollama_classify_task(model, body)
-        if tag:
-            decide[key] = tag
-
-    if not decide:
-        return 0
-
-    by_src: Dict[str, List[Tuple[str, str]]] = {}
-    for t in tasks:
-        if has_any_mode_tag(t.display):
-            continue
-        body = _task_body_for_llm(t.display)
-        key = strip_task_to_match(body)
-        tag = decide.get(key, "")
-        if not tag:
-            continue
-        src = extract_source_note_from_task_display(t.display)
-        by_src.setdefault(src, []).append((key, tag))
-
-    changed_files = 0
-    for src_note, items in by_src.items():
-        src_path = vault_root / (src_note + ".md")
-        if not src_path.exists():
-            continue
-        try:
-            original = src_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except Exception:
-            continue
-
-        new_lines = []
-        changed = False
-        for ln in original:
-            out_ln = ln
-            s = ln.strip()
-            if TASK_INCOMPLETE_RE.match(s) and not has_any_mode_tag(s):
-                raw_key = strip_task_to_match(_task_body_for_llm(s))
-                for key, tag in items:
-                    if raw_key == key and tag not in out_ln:
-                        out_ln = out_ln.rstrip() + " " + tag
-                        changed = True
-                        break
-            new_lines.append(out_ln)
-
-        if changed:
-            try:
-                src_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                changed_files += 1
-            except Exception:
-                pass
-    return changed_files
 
 # =========================
 # Tier tasks + funnel
@@ -1045,7 +752,10 @@ def render_atlas_block(
                 lines.append("  - (no #deep tasks)")
                 continue
 
-            default_placeholders = 1 if kind == "DEEP_WORK" else 3
+            if kind in ("ADMIN_AM", "ADMIN_PM"):
+                default_placeholders = 0
+            else:
+                default_placeholders = 1 if kind == "DEEP_WORK" else 3
             for _ in range(default_placeholders):
                 lines.append(ph())
 
@@ -1185,7 +895,7 @@ def clear_previous_focus_tags_in_sources(vault_root: Path, sources: List[str], e
         changed = False
         new_lines: List[str] = []
         for ln in original:
-            if "#atlas/today" in ln or "#atlas/focus/" in ln or "#atlas/slot/" in ln:
+            if "#atlas/today" in ln or "#atlas/focus/" in ln:
                 stripped = _strip_focus_tags_from_line(ln)
                 if stripped != ln:
                     changed = True
@@ -1610,7 +1320,9 @@ def main() -> int:
     ap.add_argument("--vault-root", type=str, default=str(DEFAULT_VAULT_ROOT), help="Obsidian vault root.")
     ap.add_argument("--task-sources", type=str, default=DEFAULT_TASK_SOURCES, help="Comma-separated sources.")
     ap.add_argument("--scan-vault-tasks", action="store_true", help="Scan task-sources for due-dated Tasks-plugin tasks.")
-    ap.add_argument("--ollama-tag", type=str, default="", help="Run ollama to tag untagged tasks with one of the 6 work-mode tags (tags persist).")
+    ap.add_argument("--export-fill-json", type=str, default="", help="Write fill request JSON to this path.")
+    ap.add_argument("--apply-fill-json", type=str, default="", help="Apply fill plan JSON from this path.")
+    ap.add_argument("--ollama-fill", type=str, default="", help="Run ollama model (JSON mode) and apply output.")
     ap.add_argument("--max-overdue-days", type=int, default=180, help="Overdue cap (0 disables).")
     args = ap.parse_args()
 
@@ -1710,166 +1422,65 @@ def main() -> int:
     # funnel
     funnel_items = extract_funnel(daily_text + "\n\n" + scratch_text, today)
     funnel_immediate, funnel_recent = bucket_funnel(funnel_items)
+
     # schedule blocks + render atlas
     required_blocks, remaining = place_required_blocks(free)
-    focus_slots = build_focus_slots(remaining)
-    # Optional: Ollama work-mode tagging (only for tasks missing any of the 6 mode tags). Tags persist.
-    if args.ollama_tag:
-        tagged_files = tag_mode_tags_in_source_notes(vault_root, tasks_uniq, args.ollama_tag)
-        if tagged_files:
-            print(f"✓ Ollama tagged untagged tasks in {tagged_files} file(s) (work-mode tags persisted).")
-        # NOTE: We do not re-parse tasks here; deep placement relies on #deep tag presence in the task text.
+    quick_wins_blocks = make_quick_wins_blocks(remaining)
 
-    assignments = build_assignments(
+    atlas_block = render_atlas_block(
         today=today,
+        meetings=meetings,
         required_blocks=required_blocks,
-        focus_slots=focus_slots,
+        quick_wins_blocks=quick_wins_blocks,
         imm=imm,
         crit=crit,
         std=std,
         stale=stale,
+        active_task_count=active_count,
+        funnel_immediate=funnel_immediate,
+        funnel_recent=funnel_recent,
+        funnel_total=len(funnel_items),
+        funnel_gt7=len(funnel_immediate),
     )
 
-    # Active task count for today's committed set (#atlas/today indicates selection)
-    active_task_count = sum(1 for _t, _tags in assignments.items() if FOCUS_TODAY_TAG in _tags)
+    # build pools for filling
+    pools = {
+        "immediate": [t.display for t in imm],
+        "critical": [t.display for t in crit],
+        "standard": [t.display for t in std],
+        "cold_storage": [t.display for t in stale],
+        "funnel_immediate": [it.display for it in funnel_immediate],
+        "funnel_recent": [it.display for it in funnel_recent],
+    }
+    pools = apply_overdue_cap(pools, max_overdue_days=args.max_overdue_days)
 
+    # fill request
+    req = build_fill_request(atlas_block)
 
+    # export
+    if args.export_fill_json:
+        outp = Path(args.export_fill_json).expanduser()
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        export_payload = {**req, "tasks": pools}
+        outp.write_text(json.dumps(export_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-
-    # Build ATLAS block with slot queries (no static task duplication)
-    atlas_lines: List[str] = []
-    atlas_lines.append("<!-- ATLAS:START -->")
-    atlas_lines.append("")
-    atlas_lines.append(f"## ATLAS Focus Plan ({today.isoformat()})")
-    atlas_lines.append("")
-    atlas_lines.append("### Time Blocking")
-    if not meetings:
-        atlas_lines.append("- (no meetings)")
+    # fill
+    if args.ollama_fill:
+        payload = {**req, "tasks": pools}
+        plan = run_ollama_json(args.ollama_fill, payload)
+        atlas_block = apply_fill_plan(atlas_block, plan, req, pools)
+    elif args.apply_fill_json:
+        plan_path = Path(args.apply_fill_json).expanduser()
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        atlas_block = apply_fill_plan(atlas_block, plan, req, pools)
     else:
-        for mt in meetings:
-            atlas_lines.append(f"- {min_to_hhmm(mt.start_min)} - {min_to_hhmm(mt.end_min)}: {mt.title}")
-    atlas_lines.append("")
-    atlas_lines.append("### Execution Runway")
-    atlas_lines.append("")
+        atlas_block = apply_fill_plan(atlas_block, {"fills": []}, req, pools)
 
-    runway_blocks = list(required_blocks) + list(focus_slots)
-
-    def flush_focus_group(group: List[Block]) -> None:
-        if not group:
-            return
-        start_min = group[0].start_min
-        end_min = group[-1].end_min
-        tags = [slot_tag(today, block_label(b)) for b in group]
-        units = len(group)
-        atlas_lines.extend(
-            render_work_block_section(
-                start_min,
-                end_min,
-                title=f"Work Block ({units})",
-                tags=tags,
-                limit=units,
-            )
-        )
-
-    focus_group: List[Block] = []
-    MAX_WORK_BLOCK_MINS = 120  # group focus slots up to 2 hours for readability
-
-    for b in sorted(runway_blocks, key=lambda x: x.start_min):
-        if b.kind == "FOCUS_SLOT":
-            # group consecutive focus slots, capped at MAX_WORK_BLOCK_MINS
-            if not focus_group:
-                focus_group = [b]
-            else:
-                proposed_mins = (b.end_min - focus_group[0].start_min)
-                is_consecutive = (b.start_min == focus_group[-1].end_min)
-                if (not is_consecutive) or (proposed_mins > MAX_WORK_BLOCK_MINS):
-                    flush_focus_group(focus_group)
-                    focus_group = [b]
-                else:
-                    focus_group.append(b)
-            continue
-
-        # Non-focus block: flush any pending focus group, then render this block.
-        flush_focus_group(focus_group)
-        focus_group = []
-
-        if b.kind == "ADMIN_AM":
-            atlas_lines.extend(render_buffer_section(b, "Admin AM (buffer)", "_Email/calls/triage — no assigned tasks._"))
-        elif b.kind == "ADMIN_PM":
-            atlas_lines.extend(render_buffer_section(b, "Admin PM (buffer)", "_Wrap-up/inbox/ops — no assigned tasks._"))
-        elif b.kind == "SOCIAL_POST":
-            atlas_lines.extend(render_buffer_section(b, "Social (post + engage)"))
-        elif b.kind == "SOCIAL_REPLIES":
-            atlas_lines.extend(render_buffer_section(b, "Social (commenting + replies)"))
-        elif b.kind == "DEEP_WORK":
-            mins = b.end_min - b.start_min
-            atlas_lines.extend(render_slot_section(b, title=f"Deep Work ({mins} min)", tag=slot_tag(today, "deep")))
-
-    # flush trailing group
-    flush_focus_group(focus_group)
-    atlas_lines.append("### Focus Views")
-    atlas_lines.append("")
-    atlas_lines.append("#### ⚡ Quick Wins (Top 5)")
-    atlas_lines.append("```tasks")
-    atlas_lines.append("tag includes #quickcap")
-    atlas_lines.append("not done")
-    atlas_lines.append("sort by function reverse task.urgency")
-    atlas_lines.append("short mode")
-    atlas_lines.append("limit 5")
-    atlas_lines.append("```")
-    atlas_lines.append("")
-    atlas_lines.append("#### Due today")
-    atlas_lines.append("```tasks")
-    atlas_lines.append("tag includes #atlas/today")
-    atlas_lines.append("due today")
-    atlas_lines.append("not done")
-    atlas_lines.append("sort by function reverse task.urgency")
-    atlas_lines.append("short mode")
-    atlas_lines.append("limit 50")
-    atlas_lines.append("```")
-    atlas_lines.append("")
-    atlas_lines.append("#### <span style='color:red; '>PAST DUE</span>")
-    atlas_lines.append("```tasks")
-    atlas_lines.append("tag includes #atlas/today")
-    atlas_lines.append("due before today")
-    atlas_lines.append("not done")
-    atlas_lines.append("sort by function reverse task.urgency")
-    atlas_lines.append("short mode")
-    atlas_lines.append("limit 50")
-    atlas_lines.append("```")
-    atlas_lines.append("")
-    atlas_lines.append("#### Upcoming")
-    atlas_lines.append("```tasks")
-    atlas_lines.append("tag includes #atlas/today")
-    atlas_lines.append("due after today")
-    atlas_lines.append("not done")
-    atlas_lines.append("sort by due")
-    atlas_lines.append("short mode")
-    atlas_lines.append("limit 50")
-    atlas_lines.append("```")
-    atlas_lines.append("")
-    atlas_lines.append(f"**Active task count:** {active_task_count}")
-    atlas_lines.append("")
-    atlas_lines.append("**📥 FUNNEL:**")
-    atlas_lines.append("")
-    if funnel_immediate:
-        atlas_lines.append("**Items needing immediate processing (>7 days old):**")
-        for fi in funnel_immediate:
-            age = (today - fi.item_date).days
-            atlas_lines.append(f"- {fi.display} – {age} days old")
-        atlas_lines.append("")
-    atlas_lines.append(f"**Funnel count:** {len(funnel_items)} total, {len(funnel_immediate)} items >7 days old")
-    atlas_lines.append("")
-    atlas_lines.append("<!-- ATLAS:END -->")
-    atlas_lines.append("")
-
-    atlas_block = "\n".join(atlas_lines)
-
-    # Apply plan-state tags to source tasks: #atlas/today + dated focus tag + slot tags
-    changed_files = tag_assignments_in_source_notes(vault_root, assignments)
-    if changed_files:
-        print(f"✓ Tagged today's assignments in {changed_files} file(s) (today + slot tags).")
-
+    # tag source tasks so Focus queries render live
+    filled = extract_filled_task_displays_from_atlas(atlas_block)
+    tagged = tag_filled_tasks_in_source_notes(vault_root, filled, today=today, write_dated_tag=True)
+    if tagged:
+        print(f"✓ Tagged {tagged} task(s) with #atlas/today in source notes.")
 
     # output vs write
     if args.stdout:

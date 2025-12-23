@@ -1,200 +1,193 @@
-ATLAS Transform
+📘 ATLAS – Adaptive Time-Linked Action System
 
-Automated Time-Locked Action System for Obsidian
+ATLAS is a daily execution system built on top of Obsidian tasks.
+It is designed for real-world executive schedules where meetings are immovable, priorities shift, and plans must degrade gracefully.
 
-ATLAS Transform is a Python-based workflow that generates a structured daily execution plan inside an Obsidian Daily Note. It pulls from your Daily Note, Scratchpad, and optionally the broader vault, then produces a focused, time-boxed plan aligned to real constraints (meetings, workday bounds, deep work, and quick wins).
-
-This is not a task manager.
-It is a daily decision system.
-
-⸻
-
-What ATLAS Does
-
-1. Builds a Daily Execution Plan
-
-ATLAS generates an <!-- ATLAS:START --> … <!-- ATLAS:END --> block that includes:
-	•	Time Blocking
-	•	Meetings (from the Daily Note only)
-	•	Deep Work (max 1 task)
-	•	Admin AM / Admin PM
-	•	Social blocks (optional, capacity-aware)
-	•	Quick Wins Capacity
-	•	Converts remaining time into 15-minute execution units
-	•	Task Priorities
-	•	Immediate
-	•	Critical
-	•	Standard
-	•	Cold Storage (stale but visible)
-	•	Funnel
-	•	Capture-only items (#quickcap, no due date)
-
-2. Preserves Provenance
-
-Every task retains a backlink to where it came from:
-	•	Daily Note → [[…|daily]]
-	•	Scratchpad → [[…|scratch]]
-	•	Vault-scanned tasks → [[…|source]]
-
-No orphaned tasks. Ever.
-
-3. Enforces Rules (on purpose)
-	•	Cancelled tasks ([x], [-], ❌) are excluded
-	•	Deep Work requires #deep
-	•	No duplicate task placement
-	•	Tasks must already exist — nothing is invented
+ATLAS emphasizes:
+	•	One-time daily prioritization
+	•	No dynamic backfilling
+	•	Visible progress through empty time blocks
+	•	Low maintenance and high trust
 
 ⸻
 
-Optional: AI-Assisted Slot Filling (Ollama)
+Core Principles
 
-ATLAS can export a JSON “fill request”, send it to a local Ollama model, then safely apply the results back into the daily plan.
+1. Calendar Is the Hard Constraint
 
-This gives you AI suggestions with deterministic guardrails.
+Meetings and fixed events are treated as immovable blocks.
+All work is planned around the calendar, not against it.
 
-⸻
+2. Plan Once, Execute All Day
 
-Folder Assumptions
+ATLAS is run once per day (typically in the morning).
+After that:
+	•	Tasks do not reshuffle
+	•	Slots do not refill
+	•	You execute what was committed
 
-Default paths (override via CLI if needed):
+3. Empty Time Blocks Mean Success
 
-Vault Root:
-~/Obsidian/Lighthouse
+When you complete a task, its slot goes empty.
+Nothing replaces it automatically.
 
-Daily Notes:
-4-RoR/Calendar/Notes/Daily Notes/YYYY-MM-DD.md
+Empty space is evidence of progress, not wasted capacity.
 
-Scratchpad:
-4-RoR/X/Scratchpad.md
+4. One Source of Truth for Tasks
 
-
-⸻
-
-Installation
-
-Requirements
-	•	Python 3.10+
-	•	Obsidian
-	•	(Optional) Ollama
-
-Create a virtual environment:
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-No external Python dependencies beyond the standard library.
+Tasks always live in their original notes.
+ATLAS never creates duplicate tasks or checkboxes.
 
 ⸻
 
-Core Commands
+Task Taxonomy (Work-Mode Tags)
 
-Generate / Update Today’s ATLAS Block
+ATLAS uses a minimal set of six work-mode tags to guide scheduling.
+These tags are persistent and describe the nature of the work, not priority.
 
-Writes directly into today’s Daily Note.
+Tag	Meaning
+#deep	Sustained, high-cognitive work requiring uninterrupted time
+#focus	Serious thinking or preparation, but interruptible
+#shallow	Low-effort, routine, interruptible work
+#admin	Operational upkeep (email, filing, coordination)
+#call	Requires synchronous communication
+#quickcap	≤15-minute tasks suitable for opportunistic completion
 
-python atlas_transform.py
+Tagging Rules
+	•	Ollama only tags tasks that lack one of the six tags
+	•	Existing tags are never overridden
+	•	Tags persist across days until you change them manually
 
-Print to stdout (no file write)
+⸻
 
-Useful for testing.
+Ollama Integration
 
-python atlas_transform.py --stdout
+ATLAS optionally uses Ollama (llama3.1:8b) for initial task classification only.
 
-Run for a specific date
+Ollama:
+	•	Assigns one work-mode tag to untagged tasks
+	•	Never prioritizes tasks
+	•	Never assigns slots
+	•	Never removes tags
 
-python atlas_transform.py --date 2025-12-21
+All prioritization and scheduling decisions remain deterministic and Python-driven.
+
+⸻
+
+Daily Workflow
+
+1. Archive (Pre-Flight)
+
+Before planning, completed Scratchpad items are automatically:
+	•	Backed up
+	•	Removed from the Scratchpad
+	•	Appended to a vault archive
+
+This keeps planning inputs clean and current.
+
+2. Daily Planning (ATLAS Run)
+
+When ATLAS runs, it:
+	1.	Reads calendar constraints
+	2.	Builds available 30-minute time units
+	3.	Attempts to allocate:
+	•	Deep Work
+	•	Preferred: 120 minutes
+	•	Minimum: 60 minutes
+	•	Omitted if neither fits
+	•	Admin AM (best-effort before noon, optional)
+	•	Admin PM (guaranteed closure buffer)
+	4.	Assigns remaining capacity to Work Blocks
+	5.	Tags selected tasks with:
+	•	#atlas/today
+	•	#atlas/slot/YYYY-MM-DD/HHMM-HHMM
+
+⸻
+
+Time Blocks & Work Blocks
+
+Deep Work
+	•	Requires contiguous time
+	•	Accepts #deep tasks first
+	•	Falls back to #focus only if no #deep tasks exist
+
+Work Blocks
+	•	Represent execution time
+	•	Max 1 task per 30 minutes
+	•	Rendered as grouped blocks (up to 120 minutes) for readability
+	•	Tasks are still individually slotted under the hood
+
+Admin Buffers
+	•	Admin AM and Admin PM are buffers only
+	•	No tasks are auto-assigned
+	•	Designed for reality (email, interruptions, wrap-up)
+
+⸻
+
+Quick Wins
+
+Quick Wins are never slotted.
+
+They are shown as a dynamic list:
+	•	Top 5 items
+	•	Sorted by urgency
+	•	Refreshing the note reveals the next items
+
+This allows opportunistic progress without polluting the runway.
+
+⸻
+
+Daily Views
+
+The daily note includes several dynamic views powered by the Tasks plugin:
+	•	Quick Wins (Top 5)
+	•	Due Today
+	•	Past Due
+	•	Upcoming
+	•	Funnel (stale items)
+
+These views are informational and do not affect slot assignment.
+
+⸻
+
+What ATLAS Intentionally Does Not Do
+	•	No automatic rescheduling during the day
+	•	No dynamic refill of completed slots
+	•	No priority recalculation mid-day
+	•	No task duplication
+	•	No attempt to “optimize” every minute
+
+ATLAS is designed for trust, not perfection.
+
+⸻
+
+How to Run
+
+Typical Alfred / shell workflow:
+
+python3 archive_completed_items.py
+python3 atlas_transform.py --date "$(date +%Y-%m-%d)" --ollama-tag atlas-tags
 
 
 ⸻
 
-JSON + AI Workflow (Optional but Powerful)
+Philosophy
 
-1. Export a Fill Request
+ATLAS is built for people whose days:
+	•	Get interrupted
+	•	Include meetings they don’t control
+	•	Require judgment, not just throughput
 
-Creates a machine-readable description of:
-	•	All empty slots
-	•	All eligible tasks
-
-python atlas_transform.py \
-  --export-fill-json /tmp/atlas_fill_request.json
-
-2. Run Ollama Manually (example)
-
-ollama run atlas-fill "$(cat /tmp/atlas_fill_request.json)"
-
-3. Apply the Fill Plan
-
-python atlas_transform.py \
-  --apply-fill-json /tmp/atlas_fill_plan.json
-
-4. One-Step AI Fill (recommended)
-
-python atlas_transform.py \
-  --ollama-fill atlas-fill
-
-ATLAS will:
-	•	Build the request
-	•	Call Ollama
-	•	Validate output
-	•	Apply fills safely
+The system favors clarity over cleverness and execution over optimization.
 
 ⸻
 
-Shutdown Ritual (Built-In)
+What We Are Still Intentionally Iterating
 
-ATLAS automatically appends a Shutdown section immediately after <!-- ATLAS:END -->.
+(Some things are left undocumented on purpose.)
+	•	Long-term metrics
+	•	Weekly / monthly rollups
+	•	Deferred task aging thresholds
+	•	Automation beyond the daily run
 
-This is manual by design — no command required.
-
-### Shutdown
-
-**✅ Wins (3 bullets):**
-- 
-- 
-- 
-
-**🧹 Close the loops:**
-- [ ] Inbox zero-ish
-- [ ] Update task statuses
-- [ ] Capture new inputs → Funnel
-
-**🧠 Tomorrow’s first move:**
-- [ ] Identify ONE #deep task
-- [ ] Write next physical action if blocked
-
-**🧾 End-of-day note:**
--
-
-
-⸻
-
-How Reflection Carries Forward
-
-Reflection is captured in context, not in a separate system.
-	•	Completed tasks are checked off in place
-	•	New inputs land in the Funnel
-	•	Deep Work clarity feeds tomorrow’s plan
-	•	The next day’s ATLAS run re-evaluates everything fresh
-
-ATLAS never assumes yesterday’s plan still applies.
-
-⸻
-
-Design Philosophy
-	•	Daily clarity beats long-range fantasy
-	•	Time is the primary constraint
-	•	Tasks exist to be executed, not curated
-	•	AI assists — it never decides
-
-This system is intentionally opinionated.
-
-⸻
-
-Status
-
-ATLAS Transform is:
-	•	Actively used
-	•	Locally run
-	•	Designed for long-term personal execution, not SaaS scale
-
-Expect evolution, not churn.
+Those will evolve based on real usage.
