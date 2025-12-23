@@ -190,14 +190,22 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
 
     body = msec.group(1)
 
-    checkbox_prefix_re = re.compile(r"^\s*-\s*\[\s*([xX\-])?\s*\]\s*")
-    cancelled_re = re.compile(r"^\s*-\s*\[\s*-\s*\]\s*", re.IGNORECASE)
+    # Allows: - [ ] ... / - [-] ... as well as rendered bullet "•"
+    checkbox_prefix_re = re.compile(r"^\s*[-•]\s*\[\s*([xX\-])?\s*\]\s*")
+    cancelled_re = re.compile(r"^\s*[-•]\s*\[\s*-\s*\]\s*", re.IGNORECASE)
 
+    # Accept:
+    #   - 0800 - 0830: MEET Title
+    #   • 08:00 - 08:30 MEET [[Title]]
+    #   0800 - 0830 Title
     timeblock_line_re = re.compile(
-        r"""^\s*-\s*
-            (?P<st>[0-9:]{3,5})\s*-\s*(?P<en>[0-9:]{3,5})
-            \s*(?:(?:MEET)\s*)?
-            (?:\[\[(?P<bracket>.*?)\]\]|(?P<title>.+))\s*$
+        r"""^\s*
+            (?:[-•]\s*)?                                     # optional leading bullet (- or •)
+            (?P<st>(?:\d{1,2}:\d{2}|\d{3,4}))\s*-\s*
+            (?P<en>(?:\d{1,2}:\d{2}|\d{3,4}))
+            \s*:?\s*                                         # optional colon after end time
+            (?:(?:MEET)\s+)?                                 # optional MEET token (if present, require space after)
+            (?:\[\[(?P<bracket>.*?)\]\]|(?P<title>.+?))\s*$   # [[wikilink]] or plain title
         """,
         re.VERBOSE,
     )
@@ -206,8 +214,12 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
         line = line.rstrip()
         if not line.strip():
             continue
+
+        # Skip cancelled meetings like "- [-] 0800 - 0830 ..."
         if cancelled_re.match(line):
             continue
+
+        # Normalize checkbox lines to a plain bullet so matching is consistent
         if checkbox_prefix_re.match(line):
             line = checkbox_prefix_re.sub("- ", line, count=1)
 
@@ -236,7 +248,6 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
 
     meetings.sort(key=lambda x: (x.start_min, x.end_min, x.title))
     return meetings
-
 
 # =========================
 # Extract: tasks + funnel
@@ -965,25 +976,35 @@ def _ollama_classify_task(model: str, task_text: str) -> str:
             return t
     return ""
 
-def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: str, run_date: date, repo_root: Optional[Path] = None) -> OllamaTagReport:
+def tag_mode_tags_in_source_notes(
+    vault_root: Path,
+    tasks: List[Task],
+    model: str,
+    run_date: date,
+    repo_root: Optional[Path] = None,
+) -> OllamaTagReport:
     """Tag tasks in source notes with a work-mode tag if none of the six tags exist.
 
     Ollama is only invoked for tasks missing ALL MODE_TAGS. Existing mode tags are never overridden.
     Writes a human-readable log + JSON artifact to repo-owned data/logs when any tagging occurs.
     """
+
     tasks_seen = len(tasks)
     skipped_already = 0
     decide: Dict[str, str] = {}
     decisions: List[OllamaTagDecision] = []
 
+    # 1) Decide tags for tasks missing mode tags
     for t in tasks:
         if has_any_mode_tag(t.display):
             skipped_already += 1
             continue
+
         body = _task_body_for_llm(t.display)
         key = strip_task_to_match(body)
         if key in decide:
             continue
+
         tag = _ollama_classify_task(model, body)
         if tag:
             decide[key] = tag
@@ -1002,44 +1023,63 @@ def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: st
     if not decide:
         return report
 
+    # 2) Group tasks by their *source note*, derived from the ⤴ [[...]] backlink
     by_src: Dict[str, List[Tuple[str, str]]] = {}
+
     for t in tasks:
         key = strip_task_to_match(_task_body_for_llm(t.display))
-        if key in decide:
-            by_src.setdefault(t.source, []).append((key, decide[key]))
+        if key not in decide:
+            continue
+
+        # Your Task model doesn't carry a source attribute; the source is embedded in display via ⤴ [[...]]
+        src_link = extract_source_note_from_task_display(t.display)
+        if not src_link:
+            continue  # can't persist a tag without knowing which note to edit
+
+        src_path = _vault_note_path_from_wikilink(vault_root, src_link)  # absolute .md path
+        by_src.setdefault(src_path.as_posix(), []).append((key, decide[key]))
 
     tagged_files = 0
-    for src_path_str, items in by_src.items():
-        src_path = vault_root / src_path_str
+
+    # 3) Apply tags into each source note
+    for src_link, items in by_src.items():
+        src_path = _vault_note_path_from_wikilink(vault_root, src_link)
         if not src_path.exists():
             continue
-        original = src_path.read_text(encoding="utf-8").splitlines()
+
+        try:
+            original = src_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            continue
+
         new_lines: List[str] = []
         changed = False
 
-        # Build set of targets with tags
-        targets: List[Tuple[str, str]] = []
-        for disp, tag in items:
-            targets.append((disp, tag))
+        # targets: normalized task body -> tag
+        targets: Dict[str, str] = {disp: tag for (disp, tag) in items}
 
         for ln in original:
             out_ln = ln
             s = ln.strip()
+
             if TASK_INCOMPLETE_RE.match(s):
                 raw_body = strip_task_to_match(remove_checkbox_prefix(s)).strip()
-                for body, tag in targets:
-                    if raw_body == body:
-                        if tag and tag not in out_ln:
-                            out_ln = out_ln.rstrip() + " " + tag
-                            changed = True
-                        break
+                if raw_body in targets:
+                    tag = targets[raw_body]
+                    if tag and tag not in out_ln:
+                        out_ln = out_ln.rstrip() + " " + tag
+                        changed = True
+
             new_lines.append(out_ln)
 
         if changed:
-            src_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
-            tagged_files += 1
+            try:
+                src_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+                tagged_files += 1
+            except Exception:
+                pass
 
-    # Write receipts into data/logs
+    # 4) Write receipts into data/logs
     try:
         base = repo_root if repo_root else Path(__file__).parent
         logs_dir = base / "data" / "logs"
@@ -1049,18 +1089,17 @@ def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: st
         log_path = logs_dir / f"atlas_ollama_tags_{run_date.isoformat()}.log"
         json_path = logs_dir / f"atlas_ollama_tags_{run_date.isoformat()}.json"
 
-        # Human-readable log (append per run)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(f"=== ATLAS Ollama Tagging Receipt ({stamp}) ===\n")
             f.write(f"Model: {model}\n")
             f.write(f"Tasks seen: {tasks_seen}\n")
             f.write(f"Tasks evaluated (needed tagging): {len(decisions)}\n")
             f.write(f"Tasks tagged: {len(decisions)}\n")
-            f.write(f"Tasks skipped (already had mode tag): {skipped_already}\n\n")
+            f.write(f"Tasks skipped (already had mode tag): {skipped_already}\n")
+            f.write(f"Source notes updated: {tagged_files}\n\n")
             for d in decisions:
                 f.write(f"TASK: {d.task}\nTAG:  {d.tag}\n\n")
 
-        # JSON artifact (overwrite daily for simplicity)
         payload = {
             "date": run_date.isoformat(),
             "timestamp": stamp,
@@ -1069,6 +1108,7 @@ def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: st
             "tasks_evaluated": len(decisions),
             "tasks_tagged": len(decisions),
             "tasks_skipped_already_tagged": skipped_already,
+            "source_notes_updated": tagged_files,
             "decisions": [{"task": d.task, "tag": d.tag} for d in decisions],
         }
         json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1076,7 +1116,6 @@ def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: st
         report.log_path = log_path
         report.json_path = json_path
     except Exception:
-        # Never let observability break planning.
         pass
 
     return report
@@ -1372,8 +1411,18 @@ def _iter_md_files_from_sources(vault_root: Path, sources: List[str], exclude_ar
 
 
 def _strip_focus_tags_from_line(line: str) -> str:
+    # Remove all ATLAS planning tags (today/focus/slot)
     line = re.sub(r"(?<!\S)#atlas/today\b", "", line)
     line = re.sub(r"(?<!\S)#atlas/focus/\d{4}-\d{2}-\d{2}\b", "", line)
+
+    # ✅ Remove slot tags (any date + any label)
+    line = re.sub(
+        r"(?<!\S)#atlas/slot/\d{4}-\d{2}-\d{2}/[A-Za-z0-9\-]+(?:-[A-Za-z0-9\-]+)?\b",
+        "",
+        line,
+    )
+
+    # Cleanup whitespace
     line = re.sub(r"[ \t]{2,}", " ", line)
     line = re.sub(r"\s+$", "", line)
     return line
@@ -1817,9 +1866,16 @@ def main() -> int:
     ap.add_argument("--scan-vault-tasks", action="store_true", help="Scan task-sources for due-dated Tasks-plugin tasks.")
     ap.add_argument("--ollama-tag", type=str, default="", help="Run ollama to tag untagged tasks with one of the 6 work-mode tags (tags persist).")
     ap.add_argument("--max-overdue-days", type=int, default=180, help="Overdue cap (0 disables).")
+    ap.add_argument(
+        "--run-receipt",
+        action="store_true",
+        help="Write detailed run receipt logs to data/logs (debug). Off by default.",
+    )
     args = ap.parse_args()
 
+    # ---------------------------
     # resolve date + paths
+    # ---------------------------
     forced_today: Optional[date] = None
     if args.date:
         try:
@@ -1843,7 +1899,9 @@ def main() -> int:
     if not today:
         today = datetime.now().date()
 
-    # clear prior focus tags ONCE (sources + scratch + today daily)
+    # ---------------------------
+    # clear prior focus tags ONCE
+    # ---------------------------
     sources = [s.strip() for s in (args.task_sources or "").split(",") if s.strip()]
     try:
         sources.append(scratchpad_path.relative_to(vault_root).as_posix())
@@ -1859,11 +1917,13 @@ def main() -> int:
     if cleared_files:
         print(f"✓ Cleared prior focus tags in {cleared_files} file(s).")
 
-    # read AFTER clearing (so daily/scratch are updated)
+    # read AFTER clearing
     daily_text = read_text(daily_path) if daily_path.exists() else ""
     scratch_text = read_text(scratchpad_path) if scratchpad_path.exists() else ""
 
+    # ---------------------------
     # meetings -> free windows
+    # ---------------------------
     meetings = clamp_meetings_to_day(extract_meetings_from_daily(daily_text))
     busy = build_busy_windows(meetings)
     free = invert_busy_to_free(busy)
@@ -1881,7 +1941,9 @@ def main() -> int:
     except Exception:
         scratch_link = "[[Scratchpad|scratch]]"
 
+    # ---------------------------
     # tasks: daily + scratch
+    # ---------------------------
     tasks_daily, count_daily = extract_tasks(daily_text, today, source_link=daily_link)
     tasks_scratch, count_scratch = extract_tasks(scratch_text, today, source_link=scratch_link)
 
@@ -1912,13 +1974,21 @@ def main() -> int:
 
     imm, crit, std, stale = tier_tasks(tasks_uniq)
 
+    # ---------------------------
     # funnel
+    # ---------------------------
     funnel_items = extract_funnel(daily_text + "\n\n" + scratch_text, today)
     funnel_immediate, funnel_recent = bucket_funnel(funnel_items)
-    # schedule blocks + render atlas
+
+    # ---------------------------
+    # schedule blocks
+    # ---------------------------
     required_blocks, remaining = place_required_blocks(free)
     focus_slots = build_focus_slots(remaining)
-    # Optional: Ollama work-mode tagging (only for tasks missing any of the 6 mode tags). Tags persist.
+
+    # ---------------------------
+    # Optional: Ollama tagging
+    # ---------------------------
     ollama_report: Optional[OllamaTagReport] = None
     if args.ollama_tag:
         ollama_report = tag_mode_tags_in_source_notes(
@@ -1936,8 +2006,10 @@ def main() -> int:
         print(f"  Skipped (already tagged): {ollama_report.tasks_skipped_already_tagged}")
         if ollama_report.log_path and ollama_report.json_path:
             print(f"  Logs: {ollama_report.log_path} and {ollama_report.json_path}")
-        # NOTE: We do not re-parse tasks here; deep placement relies on #deep tag presence in the task text.
 
+    # ---------------------------
+    # assignments (today + slot tags)
+    # ---------------------------
     assignments = build_assignments(
         today=today,
         required_blocks=required_blocks,
@@ -1947,14 +2019,11 @@ def main() -> int:
         std=std,
         stale=stale,
     )
-
-    # Active task count for today's committed set (#atlas/today indicates selection)
     active_task_count = sum(1 for _t, _tags in assignments.items() if FOCUS_TODAY_TAG in _tags)
 
-
-
-
-    # Build ATLAS block with slot queries (no static task duplication)
+    # ---------------------------
+    # Build ATLAS block
+    # ---------------------------
     atlas_lines: List[str] = []
     atlas_lines.append("<!-- ATLAS:START -->")
     atlas_lines.append("")
@@ -1990,11 +2059,10 @@ def main() -> int:
         )
 
     focus_group: List[Block] = []
-    MAX_WORK_BLOCK_MINS = 120  # group focus slots up to 2 hours for readability
+    MAX_WORK_BLOCK_MINS = 120
 
     for b in sorted(runway_blocks, key=lambda x: x.start_min):
         if b.kind == "FOCUS_SLOT":
-            # group consecutive focus slots, capped at MAX_WORK_BLOCK_MINS
             if not focus_group:
                 focus_group = [b]
             else:
@@ -2007,7 +2075,6 @@ def main() -> int:
                     focus_group.append(b)
             continue
 
-        # Non-focus block: flush any pending focus group, then render this block.
         flush_focus_group(focus_group)
         focus_group = []
 
@@ -2023,8 +2090,8 @@ def main() -> int:
             mins = b.end_min - b.start_min
             atlas_lines.extend(render_slot_section(b, title=f"Deep Work ({mins} min)", tag=slot_tag(today, "deep")))
 
-    # flush trailing group
     flush_focus_group(focus_group)
+
     atlas_lines.append("### Focus Views")
     atlas_lines.append("")
     atlas_lines.append("#### ⚡ Quick Wins (Top 5)")
@@ -2083,48 +2150,16 @@ def main() -> int:
 
     atlas_block = "\n".join(atlas_lines)
 
-    # Apply plan-state tags to source tasks: #atlas/today + dated focus tag + slot tags
+    # ---------------------------
+    # Tag SOURCE tasks for Tasks plugin live queries
+    # ---------------------------
     changed_files = tag_assignments_in_source_notes(vault_root, assignments)
     if changed_files:
         print(f"✓ Tagged today's assignments in {changed_files} file(s) (today + slot tags).")
 
-    # --- Run receipt (plan + tagging) ---
-    receipt = RunReceipt(
-        run_date=today,
-        daily_path=daily_path,
-        scratchpad_path=scratchpad_path,
-        vault_root=vault_root,
-        sources=sources,
-
-        meetings_count=len(meetings),
-        free_windows_count=len(free),
-        required_blocks=required_blocks,
-        focus_slots_count=len(focus_slots),
-
-        tasks_seen=active_count,                 # or (count_daily + count_scratch + count_extra if you prefer)
-        tasks_unique=len(tasks_uniq),
-        tasks_deep_count=sum(1 for t in tasks_uniq if t.is_deep),
-
-        assignments=assignments,
-        tag_changed_files_count=changed_files,
-
-        ollama_model=(ollama_report.model if ollama_report else ""),
-        ollama_tasks_seen=(ollama_report.tasks_seen if ollama_report else 0),
-        ollama_tasks_evaluated=(ollama_report.tasks_evaluated if ollama_report else 0),
-        ollama_tasks_tagged=(ollama_report.tasks_tagged if ollama_report else 0),
-        ollama_tasks_skipped=(ollama_report.tasks_skipped_already_tagged if ollama_report else 0),
-        ollama_log_path=(str(ollama_report.log_path) if (ollama_report and ollama_report.log_path) else ""),
-        ollama_json_path=(str(ollama_report.json_path) if (ollama_report and ollama_report.json_path) else ""),
-    )
-
-    run_log_path, run_json_path = write_run_receipt(
-        repo_root=Path(__file__).parent,
-        receipt=receipt,
-    )
-    if run_log_path and run_json_path:
-        print(f"🧾 Run receipt: {run_log_path} and {run_json_path}")
-
+    # ---------------------------
     # output vs write
+    # ---------------------------
     if args.stdout:
         print(atlas_block)
         return 0
@@ -2133,6 +2168,45 @@ def main() -> int:
     daily_path.parent.mkdir(parents=True, exist_ok=True)
     write_text(daily_path, updated_daily)
     print(f"✓ Wrote ATLAS block to: {daily_path}")
+
+    # ---------------------------
+    # Optional run receipt (debug)
+    # ---------------------------
+    if args.run_receipt:
+        try:
+            receipt = RunReceipt(
+                run_date=today,
+                daily_path=daily_path,
+                scratchpad_path=scratchpad_path,
+                vault_root=vault_root,
+                sources=sources,
+                meetings_count=len(meetings),
+                free_windows_count=len(free),
+                required_blocks=required_blocks,
+                focus_slots_count=len(focus_slots),
+                tasks_seen=active_count,
+                tasks_unique=len(tasks_uniq),
+                tasks_deep_count=sum(1 for t in tasks_uniq if getattr(t, "is_deep", False)),
+                assignments=assignments,
+                tag_changed_files_count=changed_files,
+                ollama_model=(ollama_report.model if ollama_report else ""),
+                ollama_tasks_seen=(ollama_report.tasks_seen if ollama_report else 0),
+                ollama_tasks_evaluated=(ollama_report.tasks_evaluated if ollama_report else 0),
+                ollama_tasks_tagged=(ollama_report.tasks_tagged if ollama_report else 0),
+                ollama_tasks_skipped=(ollama_report.tasks_skipped_already_tagged if ollama_report else 0),
+                ollama_log_path=(str(ollama_report.log_path) if (ollama_report and ollama_report.log_path) else ""),
+                ollama_json_path=(str(ollama_report.json_path) if (ollama_report and ollama_report.json_path) else ""),
+            )
+
+            run_log_path, run_json_path = write_run_receipt(
+                repo_root=Path(__file__).parent,
+                receipt=receipt,
+            )
+            if run_log_path and run_json_path:
+                print(f"🧾 Run receipt: {run_log_path} and {run_json_path}")
+        except Exception as e:
+            print(f"⚠️ Run receipt skipped (error): {e}")
+
     return 0
 
 
