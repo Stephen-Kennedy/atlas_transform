@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ATLAS Transform v3.0.6
+"""ATLAS Transform v3.0.8
 ========================
 
 Generates and writes a structured ATLAS block in an Obsidian Daily Note.
@@ -588,6 +588,23 @@ def make_quick_wins_blocks(remaining: List[FreeWindow]) -> List[Block]:
 
 MODE_TAGS = ["#deep", "#focus", "#shallow", "#admin", "#call", "#quickcap"]
 
+@dataclass
+class OllamaTagDecision:
+    task: str
+    tag: str
+
+@dataclass
+class OllamaTagReport:
+    run_date: date
+    model: str
+    tasks_seen: int
+    tasks_evaluated: int
+    tasks_tagged: int
+    tasks_skipped_already_tagged: int
+    decisions: List[OllamaTagDecision]
+    log_path: Optional[Path] = None
+    json_path: Optional[Path] = None
+
 def has_any_mode_tag(s: str) -> bool:
     return any(t in s for t in MODE_TAGS)
 
@@ -811,11 +828,20 @@ def _ollama_classify_task(model: str, task_text: str) -> str:
             return t
     return ""
 
-def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: str) -> int:
-    """Tag tasks in source notes with a work-mode tag if none of the six tags exist."""
+def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: str, run_date: date, repo_root: Optional[Path] = None) -> OllamaTagReport:
+    """Tag tasks in source notes with a work-mode tag if none of the six tags exist.
+
+    Ollama is only invoked for tasks missing ALL MODE_TAGS. Existing mode tags are never overridden.
+    Writes a human-readable log + JSON artifact to repo-owned data/logs when any tagging occurs.
+    """
+    tasks_seen = len(tasks)
+    skipped_already = 0
     decide: Dict[str, str] = {}
+    decisions: List[OllamaTagDecision] = []
+
     for t in tasks:
         if has_any_mode_tag(t.display):
+            skipped_already += 1
             continue
         body = _task_body_for_llm(t.display)
         key = strip_task_to_match(body)
@@ -824,57 +850,99 @@ def tag_mode_tags_in_source_notes(vault_root: Path, tasks: List[Task], model: st
         tag = _ollama_classify_task(model, body)
         if tag:
             decide[key] = tag
+            decisions.append(OllamaTagDecision(task=body, tag=tag))
+
+    report = OllamaTagReport(
+        run_date=run_date,
+        model=model,
+        tasks_seen=tasks_seen,
+        tasks_evaluated=len(decide),
+        tasks_tagged=len(decide),
+        tasks_skipped_already_tagged=skipped_already,
+        decisions=decisions,
+    )
 
     if not decide:
-        return 0
+        return report
 
     by_src: Dict[str, List[Tuple[str, str]]] = {}
     for t in tasks:
-        if has_any_mode_tag(t.display):
-            continue
-        body = _task_body_for_llm(t.display)
-        key = strip_task_to_match(body)
-        tag = decide.get(key, "")
-        if not tag:
-            continue
-        src = extract_source_note_from_task_display(t.display)
-        by_src.setdefault(src, []).append((key, tag))
+        key = strip_task_to_match(_task_body_for_llm(t.display))
+        if key in decide:
+            by_src.setdefault(t.source, []).append((key, decide[key]))
 
-    changed_files = 0
-    for src_note, items in by_src.items():
-        src_path = vault_root / (src_note + ".md")
+    tagged_files = 0
+    for src_path_str, items in by_src.items():
+        src_path = vault_root / src_path_str
         if not src_path.exists():
             continue
-        try:
-            original = src_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except Exception:
-            continue
-
-        new_lines = []
+        original = src_path.read_text(encoding="utf-8").splitlines()
+        new_lines: List[str] = []
         changed = False
+
+        # Build set of targets with tags
+        targets: List[Tuple[str, str]] = []
+        for disp, tag in items:
+            targets.append((disp, tag))
+
         for ln in original:
             out_ln = ln
             s = ln.strip()
-            if TASK_INCOMPLETE_RE.match(s) and not has_any_mode_tag(s):
-                raw_key = strip_task_to_match(_task_body_for_llm(s))
-                for key, tag in items:
-                    if raw_key == key and tag not in out_ln:
-                        out_ln = out_ln.rstrip() + " " + tag
-                        changed = True
+            if TASK_INCOMPLETE_RE.match(s):
+                raw_body = strip_task_to_match(remove_checkbox_prefix(s)).strip()
+                for body, tag in targets:
+                    if raw_body == body:
+                        if tag and tag not in out_ln:
+                            out_ln = out_ln.rstrip() + " " + tag
+                            changed = True
                         break
             new_lines.append(out_ln)
 
         if changed:
-            try:
-                src_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-                changed_files += 1
-            except Exception:
-                pass
-    return changed_files
+            src_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+            tagged_files += 1
 
-# =========================
-# Tier tasks + funnel
-# =========================
+    # Write receipts into data/logs
+    try:
+        base = repo_root if repo_root else Path(__file__).parent
+        logs_dir = base / "data" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_path = logs_dir / f"atlas_ollama_tags_{run_date.isoformat()}.log"
+        json_path = logs_dir / f"atlas_ollama_tags_{run_date.isoformat()}.json"
+
+        # Human-readable log (append per run)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"=== ATLAS Ollama Tagging Receipt ({stamp}) ===\n")
+            f.write(f"Model: {model}\n")
+            f.write(f"Tasks seen: {tasks_seen}\n")
+            f.write(f"Tasks evaluated (needed tagging): {len(decisions)}\n")
+            f.write(f"Tasks tagged: {len(decisions)}\n")
+            f.write(f"Tasks skipped (already had mode tag): {skipped_already}\n\n")
+            for d in decisions:
+                f.write(f"TASK: {d.task}\nTAG:  {d.tag}\n\n")
+
+        # JSON artifact (overwrite daily for simplicity)
+        payload = {
+            "date": run_date.isoformat(),
+            "timestamp": stamp,
+            "model": model,
+            "tasks_seen": tasks_seen,
+            "tasks_evaluated": len(decisions),
+            "tasks_tagged": len(decisions),
+            "tasks_skipped_already_tagged": skipped_already,
+            "decisions": [{"task": d.task, "tag": d.tag} for d in decisions],
+        }
+        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        report.log_path = log_path
+        report.json_path = json_path
+    except Exception:
+        # Never let observability break planning.
+        pass
+
+    return report
 
 def tier_tasks(tasks: List[Task], stale_overdue_days: int = 30) -> Tuple[List[Task], List[Task], List[Task], List[Task]]:
     imm: List[Task] = []
@@ -1714,10 +1782,23 @@ def main() -> int:
     required_blocks, remaining = place_required_blocks(free)
     focus_slots = build_focus_slots(remaining)
     # Optional: Ollama work-mode tagging (only for tasks missing any of the 6 mode tags). Tags persist.
+    ollama_report: Optional[OllamaTagReport] = None
     if args.ollama_tag:
-        tagged_files = tag_mode_tags_in_source_notes(vault_root, tasks_uniq, args.ollama_tag)
-        if tagged_files:
-            print(f"✓ Ollama tagged untagged tasks in {tagged_files} file(s) (work-mode tags persisted).")
+        ollama_report = tag_mode_tags_in_source_notes(
+            vault_root=vault_root,
+            tasks=tasks_uniq,
+            model=args.ollama_tag,
+            run_date=today,
+            repo_root=Path(__file__).parent,
+        )
+        print("🧠 Ollama classification:")
+        print(f"  Model: {ollama_report.model}")
+        print(f"  Tasks seen: {ollama_report.tasks_seen}")
+        print(f"  Tasks evaluated: {ollama_report.tasks_evaluated}")
+        print(f"  Newly tagged: {ollama_report.tasks_tagged}")
+        print(f"  Skipped (already tagged): {ollama_report.tasks_skipped_already_tagged}")
+        if ollama_report.log_path and ollama_report.json_path:
+            print(f"  Logs: {ollama_report.log_path} and {ollama_report.json_path}")
         # NOTE: We do not re-parse tasks here; deep placement relies on #deep tag presence in the task text.
 
     assignments = build_assignments(
