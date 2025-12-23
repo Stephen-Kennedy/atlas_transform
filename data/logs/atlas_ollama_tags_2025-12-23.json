@@ -1,0 +1,28 @@
+{
+  "date": "2025-12-23",
+  "timestamp": "2025-12-23 00:05:13",
+  "model": "atlas-tags",
+  "tasks_seen": 26,
+  "tasks_evaluated": 4,
+  "tasks_tagged": 4,
+  "tasks_skipped_already_tagged": 22,
+  "tagged_files": 1,
+  "decisions": [
+    {
+      "task": "Check with provisioning on either using rave link or CAD for specific actions or additional work once a working fire has been declared or something similar",
+      "tag": "#call"
+    },
+    {
+      "task": "Review with Devin, the dashboards for the fire department",
+      "tag": "#call"
+    },
+    {
+      "task": "Send to chief twiss AED community guidelines",
+      "tag": "#admin"
+    },
+    {
+      "task": "Follow up with Animal Services to stop the practice of bringing in items from home to donate #todo",
+      "tag": "#call"
+    }
+  ]
+}

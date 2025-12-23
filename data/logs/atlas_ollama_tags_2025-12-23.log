@@ -1,0 +1,20 @@
+=== ATLAS Ollama Tagging Receipt (2025-12-23 00:05:13) ===
+Model: atlas-tags
+Tasks seen: 26
+Tasks evaluated (needed tagging): 4
+Tasks tagged: 4
+Tasks skipped (already had mode tag): 22
+Tagged files: 1
+
+TASK: Check with provisioning on either using rave link or CAD for specific actions or additional work once a working fire has been declared or something similar
+TAG:  #call
+
+TASK: Review with Devin, the dashboards for the fire department
+TAG:  #call
+
+TASK: Send to chief twiss AED community guidelines
+TAG:  #admin
+
+TASK: Follow up with Animal Services to stop the practice of bringing in items from home to donate #todo
+TAG:  #call
+
