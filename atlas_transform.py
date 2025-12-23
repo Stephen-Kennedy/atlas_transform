@@ -605,6 +605,143 @@ class OllamaTagReport:
     log_path: Optional[Path] = None
     json_path: Optional[Path] = None
 
+from dataclasses import dataclass
+from typing import Any
+
+@dataclass
+class RunReceipt:
+    run_date: date
+    daily_path: Path
+    scratchpad_path: Path
+    vault_root: Path
+    sources: List[str]
+
+    meetings_count: int
+    free_windows_count: int
+    required_blocks: List[Block]
+    focus_slots_count: int
+
+    tasks_seen: int
+    tasks_unique: int
+    tasks_deep_count: int
+
+    assignments: Dict[str, List[str]]          # key: task display (or body), value: tags added
+    tag_changed_files_count: int
+
+    ollama_model: str = ""
+    ollama_tasks_seen: int = 0
+    ollama_tasks_evaluated: int = 0
+    ollama_tasks_tagged: int = 0
+    ollama_tasks_skipped: int = 0
+    ollama_log_path: str = ""
+    ollama_json_path: str = ""
+
+
+def write_run_receipt(
+    *,
+    repo_root: Path,
+    receipt: RunReceipt,
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """
+    Writes a human-readable run receipt + a JSON receipt.
+    Returns (log_path, json_path). Never raises (best-effort).
+    """
+    try:
+        logs_dir = (repo_root / "data" / "logs").resolve()
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use a timestamped filename so multiple runs in same day don't overwrite each other.
+        stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        day = receipt.run_date.isoformat()
+        log_path = logs_dir / f"atlas_run_receipt_{day}_{stamp}.log"
+        json_path = logs_dir / f"atlas_run_receipt_{day}_{stamp}.json"
+
+        # ---- Human log ----
+        lines: List[str] = []
+        lines.append(f"=== ATLAS Run Receipt ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')}) ===")
+        lines.append(f"Run date: {receipt.run_date.isoformat()}")
+        lines.append(f"Vault root: {receipt.vault_root}")
+        lines.append(f"Daily note: {receipt.daily_path}")
+        lines.append(f"Scratchpad: {receipt.scratchpad_path}")
+        lines.append(f"Sources cleared: {', '.join(receipt.sources)}")
+        lines.append("")
+        lines.append(f"Meetings: {receipt.meetings_count}")
+        lines.append(f"Free windows: {receipt.free_windows_count}")
+        lines.append(f"Focus slots: {receipt.focus_slots_count}")
+        lines.append("Required blocks:")
+        for b in receipt.required_blocks:
+            lines.append(f"  - {b.kind}: {min_to_hhmm(b.start_min)}-{min_to_hhmm(b.end_min)}")
+        lines.append("")
+        lines.append(f"Tasks seen (pre-dedupe): {receipt.tasks_seen}")
+        lines.append(f"Tasks unique: {receipt.tasks_unique}")
+        lines.append(f"Deep-tagged tasks (#deep): {receipt.tasks_deep_count}")
+        lines.append("")
+        lines.append(f"Assignments (#atlas/today): {len(receipt.assignments)}")
+        for task_disp, tags in receipt.assignments.items():
+            # Keep it readable; don’t explode the log with huge task strings.
+            short_task = task_disp.strip()
+            if len(short_task) > 140:
+                short_task = short_task[:137] + "..."
+            lines.append(f"  - {short_task}")
+            lines.append(f"    tags: {' '.join(tags)}")
+        lines.append("")
+        lines.append(f"Files changed by tagging: {receipt.tag_changed_files_count}")
+
+        if receipt.ollama_model:
+            lines.append("")
+            lines.append("Ollama tagging summary:")
+            lines.append(f"  Model: {receipt.ollama_model}")
+            lines.append(f"  Tasks seen: {receipt.ollama_tasks_seen}")
+            lines.append(f"  Tasks evaluated: {receipt.ollama_tasks_evaluated}")
+            lines.append(f"  Newly tagged: {receipt.ollama_tasks_tagged}")
+            lines.append(f"  Skipped (already tagged): {receipt.ollama_tasks_skipped}")
+            if receipt.ollama_log_path and receipt.ollama_json_path:
+                lines.append(f"  Ollama receipts: {receipt.ollama_log_path} | {receipt.ollama_json_path}")
+
+        log_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+        # ---- JSON receipt ----
+        payload: Dict[str, Any] = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "run_date": receipt.run_date.isoformat(),
+            "vault_root": str(receipt.vault_root),
+            "daily_path": str(receipt.daily_path),
+            "scratchpad_path": str(receipt.scratchpad_path),
+            "sources_cleared": receipt.sources,
+            "meetings_count": receipt.meetings_count,
+            "free_windows_count": receipt.free_windows_count,
+            "focus_slots_count": receipt.focus_slots_count,
+            "required_blocks": [
+                {
+                    "kind": b.kind,
+                    "start": min_to_hhmm(b.start_min),
+                    "end": min_to_hhmm(b.end_min),
+                    "start_min": b.start_min,
+                    "end_min": b.end_min,
+                }
+                for b in receipt.required_blocks
+            ],
+            "tasks_seen": receipt.tasks_seen,
+            "tasks_unique": receipt.tasks_unique,
+            "tasks_deep_count": receipt.tasks_deep_count,
+            "assignments": receipt.assignments,
+            "tag_changed_files_count": receipt.tag_changed_files_count,
+            "ollama": {
+                "model": receipt.ollama_model,
+                "tasks_seen": receipt.ollama_tasks_seen,
+                "tasks_evaluated": receipt.ollama_tasks_evaluated,
+                "tasks_tagged": receipt.ollama_tasks_tagged,
+                "tasks_skipped": receipt.ollama_tasks_skipped,
+                "log_path": receipt.ollama_log_path,
+                "json_path": receipt.ollama_json_path,
+            } if receipt.ollama_model else {},
+        }
+        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        return log_path, json_path
+    except Exception:
+        return None, None
+
 def has_any_mode_tag(s: str) -> bool:
     return any(t in s for t in MODE_TAGS)
 
@@ -1951,6 +2088,41 @@ def main() -> int:
     if changed_files:
         print(f"✓ Tagged today's assignments in {changed_files} file(s) (today + slot tags).")
 
+    # --- Run receipt (plan + tagging) ---
+    receipt = RunReceipt(
+        run_date=today,
+        daily_path=daily_path,
+        scratchpad_path=scratchpad_path,
+        vault_root=vault_root,
+        sources=sources,
+
+        meetings_count=len(meetings),
+        free_windows_count=len(free),
+        required_blocks=required_blocks,
+        focus_slots_count=len(focus_slots),
+
+        tasks_seen=active_count,                 # or (count_daily + count_scratch + count_extra if you prefer)
+        tasks_unique=len(tasks_uniq),
+        tasks_deep_count=sum(1 for t in tasks_uniq if t.is_deep),
+
+        assignments=assignments,
+        tag_changed_files_count=changed_files,
+
+        ollama_model=(ollama_report.model if ollama_report else ""),
+        ollama_tasks_seen=(ollama_report.tasks_seen if ollama_report else 0),
+        ollama_tasks_evaluated=(ollama_report.tasks_evaluated if ollama_report else 0),
+        ollama_tasks_tagged=(ollama_report.tasks_tagged if ollama_report else 0),
+        ollama_tasks_skipped=(ollama_report.tasks_skipped_already_tagged if ollama_report else 0),
+        ollama_log_path=(str(ollama_report.log_path) if (ollama_report and ollama_report.log_path) else ""),
+        ollama_json_path=(str(ollama_report.json_path) if (ollama_report and ollama_report.json_path) else ""),
+    )
+
+    run_log_path, run_json_path = write_run_receipt(
+        repo_root=Path(__file__).parent,
+        receipt=receipt,
+    )
+    if run_log_path and run_json_path:
+        print(f"🧾 Run receipt: {run_log_path} and {run_json_path}")
 
     # output vs write
     if args.stdout:
