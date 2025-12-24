@@ -1,0 +1,17 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+
+# ---- ATLAS generated artifacts ----
+logs/
+data/logs/
+backups/
+
+# ---- OS / Editor noise ----
+.DS_Store
+.idea/
+.vscode/
