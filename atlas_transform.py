@@ -35,7 +35,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # =========================
 # Constants
@@ -43,13 +43,13 @@ from typing import Dict, List, Optional, Tuple
 
 DEFAULT_APPT_MINUTES = 15
 
-WORK_START = 8 * 60
-WORK_END = 17 * 60
+WORK_START = 7 * 60
+WORK_END = 18 * 60
 LUNCH_START = 12 * 60
 LUNCH_END = 13 * 60
 
-FOCUS_TODAY_TAG = "#atlas/today"                # rolling tag cleared daily
-FOCUS_DATE_TAG_FMT = "#atlas/focus/{date}"      # historical tag
+FOCUS_TODAY_TAG = "#atlas/today"  # rolling tag cleared daily
+FOCUS_DATE_TAG_FMT = "#atlas/focus/{date}"  # historical tag
 
 DEFAULT_SCRATCHPAD = Path("/Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md")
 DEFAULT_DAILY_DIR = Path("/Users/stephenkennedy/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes")
@@ -182,6 +182,7 @@ TIMEBLOCK_SECTION_RE = re.compile(
     r"(?ims)^\s*###\s+Time\s+Blocking\s*$\n(.*?)(?=^\s*###\s+|\Z)"
 )
 
+
 def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
     meetings: List[Meeting] = []
     msec = TIMEBLOCK_SECTION_RE.search(daily_text)
@@ -249,6 +250,7 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
     meetings.sort(key=lambda x: (x.start_min, x.end_min, x.title))
     return meetings
 
+
 # =========================
 # Extract: tasks + funnel
 # =========================
@@ -264,11 +266,13 @@ TASK_ANY_CHECKBOX_RE = re.compile(
 
 ARCHIVE_PATH_RE = re.compile(r"(^|/)(?:_archive|archive)(/|$)", re.IGNORECASE)
 
+
 def is_archived_path(p: Path) -> bool:
     return ARCHIVE_PATH_RE.search(p.as_posix()) is not None
 
 
 SOURCE_WIKILINK_RE = re.compile(r"⤴\s*\[\[(?P<link>[^|\]]+)(?:\|(?P<alias>[^\]]+))?\]\]\s*$")
+
 
 def task_base_key(task_str: str) -> str:
     s = task_str.strip()
@@ -393,9 +397,9 @@ def extract_funnel(raw: str, today: date) -> List[FunnelItem]:
 # =========================
 
 def collect_tasks_plugin_lines(
-    vault_root: Path,
-    sources: List[str],
-    exclude_archived: bool = True,
+        vault_root: Path,
+        sources: List[str],
+        exclude_archived: bool = True,
 ) -> List[str]:
     """
     Collect not-done checkbox lines that contain a 📅 YYYY-MM-DD due date.
@@ -561,20 +565,19 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
             blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=0))
             remaining = subtract_interval(remaining, st, en)
 
-    # Social only if there is at least one 60-minute window in the original day
-    has_60 = any(w.minutes >= 60 for w in free_windows)
-    if has_60:
-        slot = choose_slot(remaining, 30, prefer="earliest")
-        if slot:
-            st, en = slot
-            blocks.append(Block(st, en, kind="SOCIAL_POST"))
-            remaining = subtract_interval(remaining, st, en)
+    # Social Writing: best-effort 30–60 minutes total, in 30-minute chunks
+    # Place one early if possible, and a second late if possible.
+    slot = choose_slot(remaining, 30, prefer="earliest")
+    if slot:
+        st, en = slot
+        blocks.append(Block(st, en, kind="SOCIAL_POST", max_tasks=1))
+        remaining = subtract_interval(remaining, st, en)
 
-        slot = choose_slot(remaining, 30, prefer="latest")
-        if slot:
-            st, en = slot
-            blocks.append(Block(st, en, kind="SOCIAL_REPLIES"))
-            remaining = subtract_interval(remaining, st, en)
+    slot = choose_slot(remaining, 30, prefer="latest")
+    if slot:
+        st, en = slot
+        blocks.append(Block(st, en, kind="SOCIAL_REPLIES", max_tasks=1))
+        remaining = subtract_interval(remaining, st, en)
 
     blocks.sort(key=lambda b: (b.start_min, b.end_min, b.kind))
     remaining.sort(key=lambda w: (w.start_min, w.end_min))
@@ -591,18 +594,18 @@ def make_quick_wins_blocks(remaining: List[FreeWindow]) -> List[Block]:
     return q
 
 
-
-
 # =========================
 # Work-mode tags + slotting
 # =========================
 
 MODE_TAGS = ["#deep", "#focus", "#shallow", "#admin", "#call", "#quickcap"]
 
+
 @dataclass
 class OllamaTagDecision:
     task: str
     tag: str
+
 
 @dataclass
 class OllamaTagReport:
@@ -616,8 +619,6 @@ class OllamaTagReport:
     log_path: Optional[Path] = None
     json_path: Optional[Path] = None
 
-from dataclasses import dataclass
-from typing import Any
 
 @dataclass
 class RunReceipt:
@@ -636,7 +637,7 @@ class RunReceipt:
     tasks_unique: int
     tasks_deep_count: int
 
-    assignments: Dict[str, List[str]]          # key: task display (or body), value: tags added
+    assignments: Dict[str, List[str]]  # key: task display (or body), value: tags added
     tag_changed_files_count: int
 
     ollama_model: str = ""
@@ -649,9 +650,9 @@ class RunReceipt:
 
 
 def write_run_receipt(
-    *,
-    repo_root: Path,
-    receipt: RunReceipt,
+        *,
+        repo_root: Path,
+        receipt: RunReceipt,
 ) -> Tuple[Optional[Path], Optional[Path]]:
     """
     Writes a human-readable run receipt + a JSON receipt.
@@ -689,7 +690,6 @@ def write_run_receipt(
         lines.append("")
         lines.append(f"Assignments (#atlas/today): {len(receipt.assignments)}")
         for task_disp, tags in receipt.assignments.items():
-            # Keep it readable; don’t explode the log with huge task strings.
             short_task = task_disp.strip()
             if len(short_task) > 140:
                 short_task = short_task[:137] + "..."
@@ -753,11 +753,14 @@ def write_run_receipt(
     except Exception:
         return None, None
 
+
 def has_any_mode_tag(s: str) -> bool:
     return any(t in s for t in MODE_TAGS)
 
+
 def is_quickcap(s: str) -> bool:
     return "#quickcap" in s
+
 
 def strip_task_to_match(s: str) -> str:
     """Normalize a task display for matching."""
@@ -769,16 +772,15 @@ def strip_task_to_match(s: str) -> str:
 def remove_checkbox_prefix(line: str) -> str:
     """Remove leading task checkbox markup like '- [ ] ' or '- [x] '."""
     s = line.lstrip()
-    # Common Markdown task formats
     for prefix in ('- [ ] ', '- [x] ', '- [X] ', '* [ ] ', '* [x] ', '* [X] '):
         if s.startswith(prefix):
             return s[len(prefix):]
-    # Handle cases like '- [ ]' with no trailing space
     for prefix in ('- [ ]', '- [x]', '- [X]', '* [ ]', '* [x]', '* [X]'):
         if s.startswith(prefix):
             rest = s[len(prefix):]
             return rest.lstrip()
     return s
+
 
 def build_focus_slots(remaining: List[FreeWindow]) -> List[Block]:
     """Create 30-minute focus slots from remaining free windows."""
@@ -790,12 +792,15 @@ def build_focus_slots(remaining: List[FreeWindow]) -> List[Block]:
             st += 30
     return slots
 
+
 def slot_tag(today: date, label: str) -> str:
     # Example: #atlas/slot/2025-12-22/0830-0900
     return f"#atlas/slot/{today.isoformat()}/{label}"
 
+
 def block_label(b: Block) -> str:
     return f"{min_to_hhmm(b.start_min)}-{min_to_hhmm(b.end_min)}"
+
 
 def render_slot_section(b: Block, *, title: str, tag: str) -> List[str]:
     lines: List[str] = []
@@ -811,11 +816,7 @@ def render_slot_section(b: Block, *, title: str, tag: str) -> List[str]:
 
 
 def render_work_block_section(start_min: int, end_min: int, *, title: str, tags: List[str], limit: int) -> List[str]:
-    """Render a grouped Work Block that pulls tasks from multiple slot tags (no backfill).
-
-    Each task is still tagged to a specific 30-minute slot in its source note; this view just
-    groups consecutive slots for readability.
-    """
+    """Render a grouped Work Block that pulls tasks from multiple slot tags (no backfill)."""
     lines: List[str] = []
     lines.append(f"#### {min_to_hhmm(start_min)} - {min_to_hhmm(end_min)}: {title}")
     lines.append("```tasks")
@@ -823,7 +824,6 @@ def render_work_block_section(start_min: int, end_min: int, *, title: str, tags:
         conds = [f"(tag includes {t})" for t in tags]
         lines.append("(" + " OR ".join(conds) + ")")
     else:
-        # Shouldn't happen, but keep query valid.
         lines.append("tag includes #atlas/slot/none")
     lines.append("not done")
     lines.append("short mode")
@@ -832,6 +832,7 @@ def render_work_block_section(start_min: int, end_min: int, *, title: str, tags:
     lines.append("")
     return lines
 
+
 def render_buffer_section(b: Block, title: str, note: str = "") -> List[str]:
     lines = [f"#### {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {title}"]
     if note:
@@ -839,15 +840,16 @@ def render_buffer_section(b: Block, title: str, note: str = "") -> List[str]:
     lines.append("")
     return lines
 
+
 def build_assignments(
-    today: date,
-    required_blocks: List[Block],
-    focus_slots: List[Block],
-    *,
-    imm: List[Task],
-    crit: List[Task],
-    std: List[Task],
-    stale: List[Task],
+        today: date,
+        required_blocks: List[Block],
+        focus_slots: List[Block],
+        *,
+        imm: List[Task],
+        crit: List[Task],
+        std: List[Task],
+        stale: List[Task],
 ) -> Dict[str, List[str]]:
     """Return mapping: task_display -> list of tags to apply (#atlas/today, #atlas/focus/date, #atlas/slot/...)."""
     assignments: Dict[str, List[str]] = {}
@@ -860,7 +862,6 @@ def build_assignments(
         d = t.display
         if is_quickcap(d):
             return False
-        # deep-tagged tasks should not be slotted into focus unless due today/overdue
         if "#deep" in d and t.overdue_days <= -1:
             return False
         return True
@@ -870,7 +871,6 @@ def build_assignments(
     # Deep work: one task max, must be #deep
     deep_blocks = [b for b in required_blocks if b.kind == "DEEP_WORK"]
     if deep_blocks:
-        # Prefer #deep; if none exist, optionally fall back to #focus (still treated as a deep slot for today).
         deep_task = next((t for t in ordered if "#deep" in t.display), None)
         if not deep_task:
             deep_task = next((t for t in ordered if "#focus" in t.display), None)
@@ -889,11 +889,14 @@ def build_assignments(
 
     return assignments
 
+
 def tag_assignments_in_source_notes(vault_root: Path, assignments: Dict[str, List[str]]) -> int:
     """Apply tags to source tasks. Matches by normalized task body."""
     by_src: Dict[str, List[Tuple[str, List[str]]]] = {}
     for disp, tags in assignments.items():
         src = extract_source_note_from_task_display(disp)
+        if not src:
+            continue
         by_src.setdefault(src, []).append((disp, tags))
 
     changed_files = 0
@@ -935,6 +938,7 @@ def tag_assignments_in_source_notes(vault_root: Path, assignments: Dict[str, Lis
                 pass
     return changed_files
 
+
 # =========================
 # Ollama tagging (optional)
 # =========================
@@ -945,9 +949,9 @@ def _task_body_for_llm(text: str) -> str:
     body = re.sub(r"\s+⤴\s+\[\[.*?\]\]\s*$", "", body).strip()
     return body
 
+
 def _ollama_classify_task(model: str, task_text: str) -> str:
     """Return one of MODE_TAGS or empty string."""
-    import subprocess
     prompt = (
         "Classify the task into exactly ONE of these tags: "
         "#deep, #focus, #shallow, #admin, #call, #quickcap.\n"
@@ -976,25 +980,20 @@ def _ollama_classify_task(model: str, task_text: str) -> str:
             return t
     return ""
 
+
 def tag_mode_tags_in_source_notes(
-    vault_root: Path,
-    tasks: List[Task],
-    model: str,
-    run_date: date,
-    repo_root: Optional[Path] = None,
+        vault_root: Path,
+        tasks: List[Task],
+        model: str,
+        run_date: date,
+        repo_root: Optional[Path] = None,
 ) -> OllamaTagReport:
-    """Tag tasks in source notes with a work-mode tag if none of the six tags exist.
-
-    Ollama is only invoked for tasks missing ALL MODE_TAGS. Existing mode tags are never overridden.
-    Writes a human-readable log + JSON artifact to repo-owned data/logs when any tagging occurs.
-    """
-
+    """Tag tasks in source notes with a work-mode tag if none of the six tags exist."""
     tasks_seen = len(tasks)
     skipped_already = 0
     decide: Dict[str, str] = {}
     decisions: List[OllamaTagDecision] = []
 
-    # 1) Decide tags for tasks missing mode tags
     for t in tasks:
         if has_any_mode_tag(t.display):
             skipped_already += 1
@@ -1023,25 +1022,17 @@ def tag_mode_tags_in_source_notes(
     if not decide:
         return report
 
-    # 2) Group tasks by their *source note*, derived from the ⤴ [[...]] backlink
     by_src: Dict[str, List[Tuple[str, str]]] = {}
-
     for t in tasks:
         key = strip_task_to_match(_task_body_for_llm(t.display))
         if key not in decide:
             continue
-
-        # Your Task model doesn't carry a source attribute; the source is embedded in display via ⤴ [[...]]
         src_link = extract_source_note_from_task_display(t.display)
         if not src_link:
-            continue  # can't persist a tag without knowing which note to edit
-
-        src_path = _vault_note_path_from_wikilink(vault_root, src_link)  # absolute .md path
-        by_src.setdefault(src_path.as_posix(), []).append((key, decide[key]))
+            continue
+        by_src.setdefault(src_link, []).append((key, decide[key]))
 
     tagged_files = 0
-
-    # 3) Apply tags into each source note
     for src_link, items in by_src.items():
         src_path = _vault_note_path_from_wikilink(vault_root, src_link)
         if not src_path.exists():
@@ -1054,8 +1045,6 @@ def tag_mode_tags_in_source_notes(
 
         new_lines: List[str] = []
         changed = False
-
-        # targets: normalized task body -> tag
         targets: Dict[str, str] = {disp: tag for (disp, tag) in items}
 
         for ln in original:
@@ -1079,7 +1068,6 @@ def tag_mode_tags_in_source_notes(
             except Exception:
                 pass
 
-    # 4) Write receipts into data/logs
     try:
         base = repo_root if repo_root else Path(__file__).parent
         logs_dir = base / "data" / "logs"
@@ -1120,6 +1108,7 @@ def tag_mode_tags_in_source_notes(
 
     return report
 
+
 def tier_tasks(tasks: List[Task], stale_overdue_days: int = 30) -> Tuple[List[Task], List[Task], List[Task], List[Task]]:
     imm: List[Task] = []
     crit: List[Task] = []
@@ -1158,178 +1147,6 @@ def age_label(ad: int) -> str:
 
 
 # =========================
-# Rendering: ATLAS block
-# =========================
-
-def _render_time_blocking(meetings: List[Meeting]) -> List[str]:
-    return [f"- {min_to_hhmm(m.start_min)} - {min_to_hhmm(m.end_min)} MEET [[{m.title}]]" for m in meetings]
-
-
-def _block_label(kind: str) -> str:
-    return {
-        "DEEP_WORK": "Deep Work (max 1 task)",
-        "ADMIN_AM": "Admin AM (email/ops)",
-        "ADMIN_PM": "Admin PM (wrap-up)",
-        "SOCIAL_POST": "Social (post + engage)",
-        "SOCIAL_REPLIES": "Social (commenting + replies)",
-    }.get(kind, kind)
-
-
-def render_focus_tasks_queries(_: date) -> List[str]:
-    lines: List[str] = []
-    lines.append("### Focus")
-    lines.append("")
-    lines.append("**🎯 TODAY (live view — complete from source):**")
-    lines.append("")
-
-    lines.append("#### Due today")
-    lines.append("```tasks")
-    lines.append("tag includes #atlas/today")
-    lines.append("due today")
-    lines.append("not done")
-    lines.append("sort by function reverse task.urgency")
-    lines.append("short mode")
-    lines.append("limit 50")
-    lines.append("```")
-    lines.append("")
-
-    lines.append("#### <span style='color:red; '>PAST DUE</span>")
-    lines.append("```tasks")
-    lines.append("tag includes #atlas/today")
-    lines.append("due before today")
-    lines.append("not done")
-    lines.append("sort by function reverse task.urgency")
-    lines.append("short mode")
-    lines.append("limit 50")
-    lines.append("```")
-    lines.append("")
-
-    lines.append("#### Upcoming")
-    lines.append("```tasks")
-    lines.append("tag includes #atlas/today")
-    lines.append("due after today")
-    lines.append("not done")
-    lines.append("sort by due")
-    lines.append("short mode")
-    lines.append("limit 50")
-    lines.append("```")
-    lines.append("")
-
-    lines.append("#### Deep Work (#deep)")
-    lines.append("```tasks")
-    lines.append("tag includes #atlas/today")
-    lines.append("tag includes #deep")
-    lines.append("not done")
-    lines.append("sort by due")
-    lines.append("short mode")
-    lines.append("limit 25")
-    lines.append("```")
-    lines.append("")
-    return lines
-
-
-def render_atlas_block(
-    today: date,
-    meetings: List[Meeting],
-    required_blocks: List[Block],
-    quick_wins_blocks: List[Block],
-    imm: List[Task],
-    crit: List[Task],
-    std: List[Task],
-    stale: List[Task],
-    active_task_count: int,
-    funnel_immediate: List[FunnelItem],
-    funnel_recent: List[FunnelItem],
-    funnel_total: int,
-    funnel_gt7: int,
-) -> str:
-    lines: List[str] = []
-    lines.append("<!-- ATLAS:START -->")
-    lines.append("")
-    lines.append(f"## ATLAS Focus Plan ({today.isoformat()})")
-    lines.append("")
-    lines.append("### Time Blocking")
-    mt = _render_time_blocking(meetings)
-    lines.extend(mt if mt else ["- (no meetings)"])
-    lines.append("")
-    lines.append("**🧱 PRE-PLACED BLOCKS:**")
-
-    REQUIRED = ["DEEP_WORK", "ADMIN_AM", "SOCIAL_POST", "SOCIAL_REPLIES", "ADMIN_PM"]
-    placed_by_kind: Dict[str, Block] = {b.kind: b for b in required_blocks}
-
-    has_deep_tasks = any(t.is_deep for t in (imm + crit + std + stale))
-
-    def ph() -> str:
-        # Keep it a strict placeholder, but with a trailing space for nicer editing.
-        return "  - [ ] "
-
-    for kind in REQUIRED:
-        label = _block_label(kind)
-        b = placed_by_kind.get(kind)
-
-        if b:
-            if kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
-                lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {label}")
-                continue
-
-            lines.append(f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}: {label}")
-
-            if kind == "DEEP_WORK" and not has_deep_tasks:
-                lines.append("  - (no #deep tasks)")
-                continue
-
-            for _ in range(b.placeholder_count()):
-                lines.append(ph())
-        else:
-            lines.append(f"- {label}")
-            if kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
-                continue
-
-            if kind == "DEEP_WORK" and not has_deep_tasks:
-                lines.append("  - (no #deep tasks)")
-                continue
-
-            default_placeholders = 1 if kind == "DEEP_WORK" else 3
-            for _ in range(default_placeholders):
-                lines.append(ph())
-
-    lines.append("")
-    lines.append("**⚡ QUICK WINS CAPACITY (15-min units):**")
-    if not quick_wins_blocks:
-        lines.append("- (manual pick): 1 unit")
-        lines.append(ph())
-    else:
-        for qb in quick_wins_blocks:
-            lines.append(f"- {min_to_hhmm(qb.start_min)} - {min_to_hhmm(qb.end_min)}: {qb.capacity_units} units")
-            for _ in range(qb.capacity_units):
-                lines.append(ph())
-
-    lines.append("")
-    lines.extend(render_focus_tasks_queries(today))
-    lines.append(f"**Active task count:** {active_task_count}")
-    lines.append("")
-    lines.append("**📥 FUNNEL:**")
-    lines.append("")
-
-    if funnel_immediate:
-        lines.append("**Items needing immediate processing (>7 days old):**")
-        for it in funnel_immediate:
-            lines.append(f"- {it.display} – {age_label(it.age_days)}")
-        lines.append("")
-
-    if funnel_recent:
-        lines.append("**Recent items (≤7 days old):**")
-        for it in funnel_recent:
-            lines.append(f"- {it.display} – {age_label(it.age_days)}")
-        lines.append("")
-
-    lines.append(f"**Funnel count:** {funnel_total} total, {funnel_gt7} items >7 days old")
-    lines.append("")
-    lines.append("<!-- ATLAS:END -->")
-    return "\n".join(lines)
-
-
-# =========================
 # Shutdown template (outside ATLAS replace)
 # =========================
 
@@ -1358,6 +1175,7 @@ SHUTDOWN_TEMPLATE = """### Shutdown
 """
 
 ATLAS_BLOCK_RE = re.compile(r"(?s)<!--\s*ATLAS:START\s*-->.*?<!--\s*ATLAS:END\s*-->", re.MULTILINE)
+
 
 def ensure_shutdown_after_atlas(note_text: str) -> str:
     if SHUTDOWN_HEADER in note_text:
@@ -1415,9 +1233,13 @@ def _strip_focus_tags_from_line(line: str) -> str:
     line = re.sub(r"(?<!\S)#atlas/today\b", "", line)
     line = re.sub(r"(?<!\S)#atlas/focus/\d{4}-\d{2}-\d{2}\b", "", line)
 
-    # ✅ Remove slot tags (any date + any label)
+    # ✅ Revised: remove slot tags (any date + any label, label supports multi-hyphen segments)
+    # Examples:
+    #   #atlas/slot/2025-12-24/0830-0900
+    #   #atlas/slot/2025-12-24/social-1
+    #   #atlas/slot/2025-12-24/deep
     line = re.sub(
-        r"(?<!\S)#atlas/slot/\d{4}-\d{2}-\d{2}/[A-Za-z0-9\-]+(?:-[A-Za-z0-9\-]+)?\b",
+        r"(?<!\S)#atlas/slot/\d{4}-\d{2}-\d{2}/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b",
         "",
         line,
     )
@@ -1462,6 +1284,10 @@ def clear_previous_focus_tags_in_sources(vault_root: Path, sources: List[str], e
 def strip_focus_tags(s: str) -> str:
     out = re.sub(r"(?<!\S)#atlas/today\b", "", s)
     out = re.sub(r"(?<!\S)#atlas/focus/\d{4}-\d{2}-\d{2}\b", "", out)
+
+    # ✅ Revised: strip slot tags too (prevents duplicates when rewriting bodies)
+    out = re.sub(r"(?<!\S)#atlas/slot/\d{4}-\d{2}-\d{2}/[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b", "", out)
+
     out = re.sub(r"\s{2,}", " ", out).strip()
     return out
 
@@ -1535,12 +1361,12 @@ def extract_filled_task_displays_from_atlas(atlas_block: str) -> List[str]:
 
 
 def tag_filled_tasks_in_source_notes(
-    vault_root: Path,
-    filled_task_displays: List[str],
-    *,
-    today: date,
-    today_tag: str = FOCUS_TODAY_TAG,
-    write_dated_tag: bool = True,
+        vault_root: Path,
+        filled_task_displays: List[str],
+        *,
+        today: date,
+        today_tag: str = FOCUS_TODAY_TAG,
+        write_dated_tag: bool = True,
 ) -> int:
     changed = 0
     date_tag = FOCUS_DATE_TAG_FMT.format(date=today.isoformat()) if write_dated_tag else ""
@@ -1610,6 +1436,7 @@ def tag_filled_tasks_in_source_notes(
 
 OVERDUE_DAYS_RE = re.compile(r"–\s+(\d+)\s+days\s+overdue\b", re.IGNORECASE)
 
+
 def is_high_signal(task_str: str) -> bool:
     s = task_str.lower()
     return any(term.lower() in s for term in HIGH_SIGNAL_TERMS)
@@ -1649,7 +1476,6 @@ def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Di
 
     block_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+(.*)$")
     quickwins_header_re = re.compile(r"^-\s+\d{4}\s*-\s*\d{4}:\s+\d+\s+units\b")
-    # tolerate trailing spaces after placeholder
     placeholder_re = re.compile(r"^\s*-\s*\[\s*\]\s*$")
 
     for ln in atlas_block.splitlines():
@@ -1673,15 +1499,15 @@ def build_fill_request(atlas_block: str, atlas_date: Optional[str] = None) -> Di
     return {
         "atlas": {"date": atlas_date},
         "slots": slots,
-        "tasks": {},  # populated externally when exporting/ollama
+        "tasks": {},
     }
 
 
 def apply_fill_plan(
-    atlas_block: str,
-    fill_plan: Dict,
-    fill_request: Dict,
-    task_pools: Dict[str, List[str]],
+        atlas_block: str,
+        fill_plan: Dict,
+        fill_request: Dict,
+        task_pools: Dict[str, List[str]],
 ) -> str:
     slots = fill_request.get("slots", [])
 
@@ -1701,7 +1527,6 @@ def apply_fill_plan(
     slot_to_task: Dict[str, str] = {}
     used_tasks: set[str] = set()
 
-    # 1) accept model/user fills (validated)
     for item in fills_raw:
         if not isinstance(item, dict):
             continue
@@ -1718,7 +1543,6 @@ def apply_fill_plan(
         slot_to_task[slot_id] = task
         used_tasks.add(task)
 
-    # 2) python fallback
     def pool_for_kind(kind: str) -> List[str]:
         if kind in ("ADMIN_AM", "ADMIN_PM"):
             return (
@@ -1764,7 +1588,6 @@ def apply_fill_plan(
             used_tasks.add(cand)
             break
 
-    # 3) apply into placeholders
     out_lines: List[str] = []
     current_kind: Optional[str] = None
     kind_counters: Dict[str, int] = {}
@@ -1783,7 +1606,6 @@ def apply_fill_plan(
     for ln in atlas_block.splitlines():
         s = ln.strip()
 
-        # quick wins header line
         if ln.startswith("- ") and re.search(r"\bunit[s]?\b", s, re.IGNORECASE):
             current_kind = "QUICK_WINS"
             out_lines.append(ln)
@@ -1863,8 +1685,10 @@ def main() -> int:
     ap.add_argument("--date", type=str, default="", help="Force date YYYY-MM-DD (optional).")
     ap.add_argument("--vault-root", type=str, default=str(DEFAULT_VAULT_ROOT), help="Obsidian vault root.")
     ap.add_argument("--task-sources", type=str, default=DEFAULT_TASK_SOURCES, help="Comma-separated sources.")
-    ap.add_argument("--scan-vault-tasks", action="store_true", help="Scan task-sources for due-dated Tasks-plugin tasks.")
-    ap.add_argument("--ollama-tag", type=str, default="", help="Run ollama to tag untagged tasks with one of the 6 work-mode tags (tags persist).")
+    ap.add_argument("--scan-vault-tasks", action="store_true",
+                    help="Scan task-sources for due-dated Tasks-plugin tasks.")
+    ap.add_argument("--ollama-tag", type=str, default="",
+                    help="Run ollama to tag untagged tasks with one of the 6 work-mode tags (tags persist).")
     ap.add_argument("--max-overdue-days", type=int, default=180, help="Overdue cap (0 disables).")
     ap.add_argument(
         "--run-receipt",
@@ -1873,9 +1697,6 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    # ---------------------------
-    # resolve date + paths
-    # ---------------------------
     forced_today: Optional[date] = None
     if args.date:
         try:
@@ -1885,11 +1706,12 @@ def main() -> int:
             return 1
 
     daily_dir = Path(args.daily_dir).expanduser()
-    daily_path = Path(args.daily).expanduser() if args.daily else (daily_dir / f"{(forced_today or datetime.now().date()).isoformat()}.md")
+    daily_path = Path(args.daily).expanduser() if args.daily else (
+        daily_dir / f"{(forced_today or datetime.now().date()).isoformat()}.md"
+    )
     scratchpad_path = Path(args.scratchpad).expanduser()
     vault_root = Path(args.vault_root).expanduser()
 
-    # determine "today"
     today = forced_today
     if not today and daily_path.name.endswith(".md") and re.fullmatch(r"\d{4}-\d{2}-\d{2}", daily_path.stem):
         try:
@@ -1899,9 +1721,7 @@ def main() -> int:
     if not today:
         today = datetime.now().date()
 
-    # ---------------------------
     # clear prior focus tags ONCE
-    # ---------------------------
     sources = [s.strip() for s in (args.task_sources or "").split(",") if s.strip()]
     try:
         sources.append(scratchpad_path.relative_to(vault_root).as_posix())
@@ -1917,13 +1737,10 @@ def main() -> int:
     if cleared_files:
         print(f"✓ Cleared prior focus tags in {cleared_files} file(s).")
 
-    # read AFTER clearing
     daily_text = read_text(daily_path) if daily_path.exists() else ""
     scratch_text = read_text(scratchpad_path) if scratchpad_path.exists() else ""
 
-    # ---------------------------
     # meetings -> free windows
-    # ---------------------------
     meetings = clamp_meetings_to_day(extract_meetings_from_daily(daily_text))
     busy = build_busy_windows(meetings)
     free = invert_busy_to_free(busy)
@@ -1941,9 +1758,7 @@ def main() -> int:
     except Exception:
         scratch_link = "[[Scratchpad|scratch]]"
 
-    # ---------------------------
     # tasks: daily + scratch
-    # ---------------------------
     tasks_daily, count_daily = extract_tasks(daily_text, today, source_link=daily_link)
     tasks_scratch, count_scratch = extract_tasks(scratch_text, today, source_link=scratch_link)
 
@@ -1952,7 +1767,6 @@ def main() -> int:
     all_tasks.extend(tasks_scratch)
     active_count = count_daily + count_scratch
 
-    # optional vault scan tasks (due-dated only)
     if args.scan_vault_tasks:
         sources_scan = [s.strip() for s in (args.task_sources or "").split(",") if s.strip()]
         extra_lines = collect_tasks_plugin_lines(vault_root, sources_scan, exclude_archived=True)
@@ -1962,7 +1776,6 @@ def main() -> int:
             all_tasks.extend(tasks_extra)
             active_count += count_extra
 
-    # dedupe across all sources
     seen = set()
     tasks_uniq: List[Task] = []
     for t in sorted(all_tasks, key=lambda x: (-x.overdue_days, x.due, x.display)):
@@ -1974,21 +1787,15 @@ def main() -> int:
 
     imm, crit, std, stale = tier_tasks(tasks_uniq)
 
-    # ---------------------------
     # funnel
-    # ---------------------------
     funnel_items = extract_funnel(daily_text + "\n\n" + scratch_text, today)
     funnel_immediate, funnel_recent = bucket_funnel(funnel_items)
 
-    # ---------------------------
     # schedule blocks
-    # ---------------------------
     required_blocks, remaining = place_required_blocks(free)
     focus_slots = build_focus_slots(remaining)
 
-    # ---------------------------
     # Optional: Ollama tagging
-    # ---------------------------
     ollama_report: Optional[OllamaTagReport] = None
     if args.ollama_tag:
         ollama_report = tag_mode_tags_in_source_notes(
@@ -2007,9 +1814,7 @@ def main() -> int:
         if ollama_report.log_path and ollama_report.json_path:
             print(f"  Logs: {ollama_report.log_path} and {ollama_report.json_path}")
 
-    # ---------------------------
     # assignments (today + slot tags)
-    # ---------------------------
     assignments = build_assignments(
         today=today,
         required_blocks=required_blocks,
@@ -2021,9 +1826,7 @@ def main() -> int:
     )
     active_task_count = sum(1 for _t, _tags in assignments.items() if FOCUS_TODAY_TAG in _tags)
 
-    # ---------------------------
     # Build ATLAS block
-    # ---------------------------
     atlas_lines: List[str] = []
     atlas_lines.append("<!-- ATLAS:START -->")
     atlas_lines.append("")
@@ -2083,9 +1886,9 @@ def main() -> int:
         elif b.kind == "ADMIN_PM":
             atlas_lines.extend(render_buffer_section(b, "Admin PM (buffer)", "_Wrap-up/inbox/ops — no assigned tasks._"))
         elif b.kind == "SOCIAL_POST":
-            atlas_lines.extend(render_buffer_section(b, "Social (post + engage)"))
+            atlas_lines.extend(render_slot_section(b, title="Writing (Social): Create/Post (30 min)", tag=slot_tag(today, "social-1")))
         elif b.kind == "SOCIAL_REPLIES":
-            atlas_lines.extend(render_buffer_section(b, "Social (commenting + replies)"))
+            atlas_lines.extend(render_slot_section(b, title="Writing (Social): Engage/Replies (30 min)", tag=slot_tag(today, "social-2")))
         elif b.kind == "DEEP_WORK":
             mins = b.end_min - b.start_min
             atlas_lines.extend(render_slot_section(b, title=f"Deep Work ({mins} min)", tag=slot_tag(today, "deep")))
@@ -2150,16 +1953,12 @@ def main() -> int:
 
     atlas_block = "\n".join(atlas_lines)
 
-    # ---------------------------
     # Tag SOURCE tasks for Tasks plugin live queries
-    # ---------------------------
     changed_files = tag_assignments_in_source_notes(vault_root, assignments)
     if changed_files:
         print(f"✓ Tagged today's assignments in {changed_files} file(s) (today + slot tags).")
 
-    # ---------------------------
     # output vs write
-    # ---------------------------
     if args.stdout:
         print(atlas_block)
         return 0
@@ -2169,9 +1968,7 @@ def main() -> int:
     write_text(daily_path, updated_daily)
     print(f"✓ Wrote ATLAS block to: {daily_path}")
 
-    # ---------------------------
     # Optional run receipt (debug)
-    # ---------------------------
     if args.run_receipt:
         try:
             receipt = RunReceipt(
