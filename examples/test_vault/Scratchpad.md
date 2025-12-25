@@ -1,0 +1,43 @@
+ - [x] Get DID numbers for Fire Admin. Davis, Feil, Allen, Robin, Thalgott, Hanson, Crooks #admin 📅 2025-12-23 ✅ 2025-12-24
+ - [ ] Work with GIS on ISO point for each address.  📅 2025-12-26 #deep
+ - [ ] Check fcc licenses for radio expirations 📅 2025-12-26 #admin #atlas/today #atlas/focus/2025-12-24 #atlas/slot/2025-12-24/1630-1700
+ - [x] Reach out to Lumen regarding text to 911 support through Intrafo for now #call 📅 2025-12-22 ✅ 2025-12-24
+ - [x] Set up NGCS MAP in Obsidian with links to Google docs #admin 📅 2025-12-22 ✅ 2025-12-24
+ - [ ] Do clean up of CA/ACA folder #deep 📅 2025-12-26 #atlas/today #atlas/focus/2025-12-24 #atlas/slot/2025-12-24/deep
+ - [ ] Schedule meeting with Phil Martin  📅 2025-12-26 #call
+ - [ ] Do training in NEOGOV 📅 2025-12-26 #shallow
+ - [ ] Explore Zendesk Outlook integration - https://support.zendesk.com/hc/en-us/articles/4408886020634-Microsoft-Setting-up-the-Zendesk-for-Microsoft-Outlook-Integration 📅 2025-12-26 #admin
+ - [ ] Watch - ASAP FL Webinar 1080p - YouTube - https://www.youtube.com/watch?v=i2l_9apJgdc #quickcap 🛫 2025-12-26 📅 2025-12-26
+ - [ ] Motorola Solutions Summit 2026 - Home - https://view.motorolasolutions.com/en-us-summit-2026/p/1 📅 2025-12-26 #quickcap
+ - [ ] Submit maintenance costs for CHS maintenance to ECB - get with Brian for form. 📅 2025-12-22 #call #atlas/today #atlas/focus/2025-12-24 #atlas/slot/2025-12-24/1600-1630
+ - [x] Check with provisioning on either using rave link or CAD for specific actions or additional work once a working fire has been declared or something similar #call 📅 2025-12-23 ✅ 2025-12-24
+ - [ ] Review with Devin, the dashboards for the fire department 📅 2025-12-29 #call
+ - [ ] Send to chief twiss AED community guidelines  📅 2025-12-26 #admin
+ - [ ] Watch - PowerPolicy Feature Release - Workflow Flexibility - Fall 2025 - https://powerdms.wistia.com/medias/f04jkh2ilt 📅 2025-12-26 #focus
+- [ ] check on light user license for MCM for Peter #todo
+- [ ] Send to David current PP Slide Deck, Community Program overview, and links to training videos. 📅 2025-12-26 #call
+- [ ] check to see if RapidDeploy October 2025 submitted 📅 2025-12-26 #admin
+- [ ] Submit to - present at APCO 2026 📅 2025-12-26 #call
+ - [ ] Look to apply for NENA 2026 🔺 📅 2025-12-26 #quickcap
+ - [ ] Follow up on tower light for Wildwood Jason Mchugh 📅 2025-10-16 #call
+- [ ] Sole source request for SVI 📅 2025-11-03 #admin
+ - [ ] Revise state 911 plan 📅 2026-01-05 #deep
+
+# Funnel
+- [ ] 2025-11-18 Reach out to Leon at the state to find out about what funding is available for text to 911 for the Motorola project #quickcap 🛫 2025-11-18 📅 2025-12-26
+- [ ] Check docusign notary with [[Leslie Smith]] #quickcap 📅 2025-12-26
+- [ ] 2025-10-30 Look to move Shawn to exempt position #quickcap
+- [ ] Return Idexx contract On #todo #tforge ➕ 2025-12-19 📅 2026-01-13 #admin
+- [ ] Follow up with Animal Services to stop the practice of bringing in items from home to donate 📅 2025-12-23 #todo #call #atlas/today #atlas/focus/2025-12-24 #atlas/slot/2025-12-24/1530-1600
+- [ ] Reduce number of logs so it doesn't allow atlas_transform.py to become too bloated. We should be able to give it a specific command to run the debug and have that noted in the readme guide 📅 friday #todo
+- [x] Reach out to Wanda on addressing automation process #todo #call 📅 2025-12-23 ✅ 2025-12-24
+- [ ] Include [[Jennifer Kasper]] on VESTA, P1, and NG Core mapping pieces 📅 Friday #todo
+- [ ] Review this site and give feedback to [[Jennifer Kasper]] http://postalpro.usps.com/address-quality/county-project 📅 Monday #todo
+- [ ] review this site and give feedback to [[Jennifer Kasper]] https://dos.fl.gov/library-archives/records-management/training/public-agencies/  📅 monday #todo
+- [ ] Add Mission Critical renewal to BOCC agenda before February 1 📅 Monday #todo
+- [ ] Speak with [[James Boyd]] regarding Josh making changes to the Verizon Portal 📅 Friday #todo
+- [ ] Complete mach alert spreadsheet feedback for MSI 📅 2025-12-24 #todo #admin #atlas/today #atlas/focus/2025-12-24 #atlas/slot/2025-12-24/1500-1530
+- [ ] Review the AED job aid and give feedback to [[Jeff Dong]] 📅 Monday #todo
+- [ ] Rebew CJIS certification https://www.cjisonline.com/ 📅 Monday #todo
+- [ ] Work on TSG contract pricing #deep 📅 friday #todo
+- [ ] Get release for tower company to climb Bushnell water tower January 5 📅 Friday #todo
