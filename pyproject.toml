@@ -18,3 +18,4 @@ where = ["src"]
 
 [project.scripts]
 atlas = "atlas_cli.main:main"
+atlas-archive = "atlas.tools.archive_completed:main"

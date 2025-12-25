@@ -1,73 +1,90 @@
-Absolutely. Let’s lock this in as ATLAS v4.0 and give you a clean, professional README.md that reflects how this system actually works now — CLI, Ollama integration, Alfred, dry runs, receipts, the whole deal.
+ATLAS OS 4.0
 
-Below is a drop-in README.md you can place at the root of the repo.
+ATLAS OS is a command-line–driven personal operating system for intentional daily execution, built on top of Obsidian, the Tasks plugin, and optional local AI (Ollama).
 
-⸻
+ATLAS transforms scattered tasks, meetings, and notes into a single, structured daily execution plan—and then keeps your source notes in sync through intelligent tagging.
 
-ATLAS Transform v4.0
-
-Adaptive Task & Lifecycle Automation System for Obsidian
-
-ATLAS is a daily execution engine for Obsidian that transforms your notes, tasks, and calendar signals into a structured, time-aware Focus Plan.
-
-Version 4.0 represents a major stabilization milestone:
-	•	Modular Python package layout
-	•	First-class CLI (atlas)
-	•	Optional Ollama-based task classification
-	•	Deterministic daily planning with receipts
-	•	Scriptable automation (Alfred, cron, shell)
-	•	Safe dry-run mode
+Version 4.0 represents a major architectural milestone:
+ATLAS is no longer a single script—it is now a modular, extensible OS.
 
 ⸻
 
 What ATLAS Does
 
-On each run, ATLAS:
-	1.	Reads
-	•	Today’s Daily Note
-	•	Scratchpad
-	•	Optional task sources across the vault (Tasks plugin style)
-	2.	Extracts
-	•	Meetings (from ### Time Blocking)
-	•	Tasks with due dates
-	•	Funnel / capture items
-	•	Existing work-mode tags
-	3.	Plans
-	•	Workday windows (respecting meetings + lunch)
-	•	Deep work, admin buffers, social blocks
-	•	30-minute focus slots grouped into work blocks
-	4.	Tags
-	•	Clears yesterday’s ATLAS tags
-	•	Assigns:
-	•	#atlas/today
-	•	#atlas/focus/YYYY-MM-DD
-	•	#atlas/slot/YYYY-MM-DD/<slot>
-	•	Optionally adds work-mode tags via Ollama
-	5.	Writes
-	•	A fully-rendered <!-- ATLAS:START --> block into the Daily Note
-	•	Optional run receipts (human + JSON)
+ATLAS generates a daily ATLAS Focus Plan inside your Obsidian Daily Note that includes:
+	•	Time-blocked meetings (from the Daily Note only)
+	•	Automatically computed free time
+	•	Structured execution blocks:
+	•	Deep Work
+	•	Admin (AM / PM)
+	•	Social Writing (create + engage)
+	•	Focus Work Blocks
+	•	Live task views powered by Obsidian Tasks queries
+	•	Funnel visibility for uncaptured or stale inputs
+
+ATLAS also writes back to source notes, tagging tasks so that:
+	•	Daily focus views stay live
+	•	Slot-level execution is traceable
+	•	No duplicate planning artifacts exist
 
 ⸻
 
-Directory Layout
+Core Features
+
+🧠 Intelligent Task Classification (Optional)
+	•	Uses Ollama with a custom model to classify tasks into:
+	•	#deep
+	•	#focus
+	•	#admin
+	•	#shallow
+	•	#call
+	•	#quickcap
+	•	Classification is idempotent: already-tagged tasks are skipped
+	•	Tags persist in source notes
+
+📅 Dynamic Schedule Construction
+	•	Workday defaults to 07:00–18:00
+	•	Lunch is automatically blocked
+	•	Meetings are clamped to the workday
+	•	Free time is inverted into executable slots
+
+🧾 Run Receipts (Optional)
+	•	Each run can emit:
+	•	A human-readable log
+	•	A structured JSON receipt
+	•	Stored under data/logs/
+	•	Ideal for debugging, audits, and future analytics
+
+🧹 Scratchpad Archiving (Optional Tool)
+	•	Completed tasks can be:
+	•	Removed from the Scratchpad
+	•	Backed up to the repo
+	•	Archived into a vault note
+	•	Can be run independently or as part of a workflow
+
+⸻
+
+Project Structure (4.0)
 
 atlas_transform/
-├─ src/
-│  ├─ atlas/                # Core logic
-│  │  └─ transform.py
-│  └─ atlas_cli/            # CLI entrypoint
-│     ├─ main.py
-│     └─ transform_cli.py
-├─ models/
-│  └─ ollama/
-│     └─ atlas-task-classifier.ModelFile
-├─ scripts/
-│  └─ test_ollama_classifier.sh
-├─ examples/
-│  └─ test_vault/
-├─ data/
-│  └─ logs/                 # Run receipts
-├─ README.md
+├── src/
+│   ├── atlas/
+│   │   ├── transform.py        # Core ATLAS engine
+│   │   ├── atlas_paths.py      # Centralized path/config layer
+│   │   └── tools/
+│   │       └── archive_completed.py
+│   └── atlas_cli/
+│       ├── main.py             # CLI entrypoint
+│       └── transform_cli.py
+├── data/
+│   ├── logs/
+│   └── backups/
+├── examples/
+│   └── test_vault/
+├── scripts/
+│   └── test_ollama_classifier.sh
+├── pyproject.toml
+├── README.md
 
 
 ⸻
@@ -76,188 +93,104 @@ Installation
 
 1. Create and activate a virtual environment
 
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 
-2. Install in editable mode
+2. Install ATLAS in editable mode
 
-pip install -e .
+python -m pip install -e .
 
-This installs the atlas command into the venv.
-
-⸻
-
-Ollama (Optional but Recommended)
-
-Model file
-
-Example: models/ollama/atlas-task-classifier.ModelFile
-
-FROM llama3.1:8b
-PARAMETER temperature 0
-PARAMETER top_p 0.9
-
-SYSTEM """
-You are a strict task classifier for an Obsidian workflow.
-
-You must output exactly ONE of these tags and nothing else:
-#deep
-#focus
-#shallow
-#admin
-#call
-#quickcap
-"""
-
-Build the model
-
-ollama create atlas-task-classifier \
-  -f models/ollama/atlas-task-classifier.ModelFile
-
-Test directly
-
-ollama run atlas-task-classifier "Draft the board agenda memo"
-
-Expected output (single tag):
-
-#deep
-
+This installs the atlas CLI into the virtual environment.
 
 ⸻
 
-Core CLI Usage
+Running ATLAS
 
-Standard daily run
+Standard Run (writes to Daily Note)
 
 atlas \
-  --vault-root "$HOME/Obsidian/Lighthouse" \
-  --daily "$HOME/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes/$(date +%Y-%m-%d).md" \
-  --scratchpad "$HOME/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md" \
+  --vault-root "/Users/you/Obsidian/Vault" \
+  --daily "/path/to/YYYY-MM-DD.md" \
+  --scratchpad "/path/to/Scratchpad.md" \
   --scan-vault-tasks \
   --ollama-tag "atlas-task-classifier" \
   --run-receipt
 
-Dry run (no file writes)
+Dry Run (stdout only)
 
 atlas --stdout ...
 
-Dry runs:
-	•	Still clear old focus tags (by design)
-	•	Still classify tasks
-	•	Do not write the ATLAS block into the daily note
 
 ⸻
 
-Recommended Wrapper Script (atlas-run)
+atlas-run Convenience Script
 
-Place this in ~/.local/bin/atlas-run:
+You can wrap ATLAS in a shell script (recommended) for:
+	•	Alfred workflows
+	•	Keyboard shortcuts
+	•	Consistent daily execution
 
-#!/usr/bin/env bash
-set -euo pipefail
+Supports modes:
+	•	run (default)
+	•	dry (stdout only)
 
-MODE="${1:-run}"
-
-ATLAS_BIN="$HOME/PycharmProjects/atlas_transform/.venv/bin/atlas"
-
-VAULT_ROOT="$HOME/Obsidian/Lighthouse"
-DAILY_NOTE="$HOME/Obsidian/Lighthouse/4-RoR/Calendar/Notes/Daily Notes/$(date +%Y-%m-%d).md"
-SCRATCHPAD="$HOME/Obsidian/Lighthouse/4-RoR/X/Scratchpad.md"
-
-EXTRA_ARGS=()
-if [[ "$MODE" == "dry" ]]; then
-  EXTRA_ARGS+=(--stdout)
-fi
-
-exec "$ATLAS_BIN" \
-  --vault-root "$VAULT_ROOT" \
-  --daily "$DAILY_NOTE" \
-  --scratchpad "$SCRATCHPAD" \
-  --scan-vault-tasks \
-  --ollama-tag "atlas-task-classifier" \
-  --run-receipt \
-  "${EXTRA_ARGS[@]}"
-
-Make it executable:
-
-chmod +x ~/.local/bin/atlas-run
-
-Usage:
-
-atlas-run        # normal
-atlas-run dry    # dry run
-
-
-⸻
-
-Alfred Integration (Recommended)
-
-Keyword: atlas
-Run Script (bash):
+Example:
 
 atlas-run
+atlas-run dry
 
-Optional second keyword: atlas dry
-
-This gives you:
-	•	One-keystroke start-of-day planning
-	•	Visual confirmation in Obsidian
-	•	Logged receipts for debugging
 
 ⸻
 
-Receipts & Debugging
+Archive Completed Scratchpad Tasks
 
-When --run-receipt is enabled, ATLAS writes:
-	•	data/logs/atlas_run_receipt_YYYY-MM-DD_HHMMSS.log
-	•	data/logs/atlas_run_receipt_YYYY-MM-DD_HHMMSS.json
+Run independently:
 
-These include:
-	•	Meetings found
-	•	Free windows
-	•	Blocks created
-	•	Tasks assigned
-	•	Ollama tagging summary
-	•	Files modified
+python -m atlas.tools.archive_completed
+
+This will:
+	•	Back up the Scratchpad
+	•	Remove completed tasks
+	•	Append them to a vault archive note
 
 ⸻
 
-Versioning
+Configuration Philosophy
 
-v4.0 highlights
-	•	Stable package imports (atlas, atlas_cli)
-	•	Ollama tagging fully integrated
-	•	Deterministic slot-based execution
-	•	Shell-safe automation
-	•	Alfred-ready
-	•	No temp environments required
+ATLAS 4.0 intentionally keeps paths centralized in atlas_paths.py.
 
-Future versions may add:
+This provides:
+	•	A single source of truth today
+	•	A clean future upgrade path to:
+	•	config.yaml
+	•	environment overrides
+	•	multi-vault support
+
+Hard-coded paths are acceptable by design at this stage.
+
+⸻
+
+Design Principles
+	•	Single plan, multiple views
+	•	Source notes are authoritative
+	•	No duplication of task state
+	•	Local-first, AI-optional
+	•	Deterministic output
+	•	Extensible, not clever
+
+⸻
+
+Roadmap (Post-4.0)
+	•	Config file support
 	•	Multi-day planning
-	•	Energy-based scheduling
-	•	Adaptive block sizing
-	•	Confidence scoring on LLM tagging
+	•	Execution telemetry
+	•	Slot completion tracking
+	•	Optional dashboard export
 
 ⸻
 
-Philosophy
+Version
 
-ATLAS is intentionally opinionated.
+ATLAS OS 4.0
 
-It favors:
-	•	Determinism over “smart guessing”
-	•	Explicit time blocks over task lists
-	•	Tags as control signals
-	•	One deep task per day, done well
-
-If the plan feels “tight,” that’s the point.
-
-⸻
-
-If you want, next we can:
-	•	Add a VERSION constant and atlas --version
-	•	Generate a changelog
-	•	Add a one-command installer
-	•	Harden the Ollama JSON-fill path
-	•	Design v4.1 features intentionally
-
-You’ve built something genuinely powerful here.
+This release marks the transition from “script” to personal operating system.

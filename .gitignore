@@ -1,10 +1,12 @@
 # ---- Python ----
 __pycache__/
+.pytest_cache
 *.pyc
 *.pyo
 *.pyd
 .venv/
 .env
+.DS_Store
 
 # ---- ATLAS generated artifacts ----
 logs/

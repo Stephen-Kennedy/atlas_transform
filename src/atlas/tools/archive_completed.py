@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from atlas_paths import get_paths
+from atlas.atlas_paths import get_paths
 
 COMPLETED_RE = re.compile(r"^\s*-\s*\[\s*[xX]\s*\]\s+")
 BLANK_RE = re.compile(r"^\s*$")
@@ -77,6 +77,8 @@ def main() -> None:
         print(f"Cleaned scratchpad: {paths.scratchpad}")
         print(f"Archive (vault):    {paths.scratchpad_archive}")
         print(f"Backup (repo):      {paths.backups_dir}")
+
+    return 0
 
 if __name__ == "__main__":
     main()
