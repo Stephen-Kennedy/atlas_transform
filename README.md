@@ -1,76 +1,125 @@
+This is a strong foundation already. What I’ve done below is not a rewrite for marketing, but a clarification and tightening for longevity:
+	•	Keeps your voice: calm, intentional, systems-first
+	•	Makes architectural intent explicit (the why, not just the what)
+	•	Reduces ambiguity for future contributors
+	•	Aligns language with what this actually is: execution infrastructure, not a productivity toy
+	•	Adds light guardrails so future-you doesn’t “optimize” it into something it was never meant to be
+
+Below is a drop-in replacement README.md.
+
+⸻
+
 ATLAS OS 4.0
 
-ATLAS OS is a command-line–driven personal operating system for intentional daily execution, built on top of Obsidian, the Tasks plugin, and optional local AI (Ollama).
+ATLAS OS is a command-line–driven personal operating system for intentional daily execution.
 
-ATLAS transforms scattered tasks, meetings, and notes into a single, structured daily execution plan—and then keeps your source notes in sync through intelligent tagging.
+It sits on top of Obsidian, the Tasks plugin, and optional local AI (Ollama). ATLAS does not replace your notes or task system. It orchestrates execution from them.
 
-Version 4.0 represents a major architectural milestone:
-ATLAS is no longer a single script—it is now a modular, extensible OS.
+ATLAS transforms scattered tasks, meetings, and notes into a single, structured daily execution plan, then keeps source notes in sync through deterministic tagging and write-back.
+
+Version 4.0 is a major architectural milestone.
+ATLAS is no longer a single script. It is now a modular, extensible OS.
 
 ⸻
 
 What ATLAS Does
 
-ATLAS generates a daily ATLAS Focus Plan inside your Obsidian Daily Note that includes:
-	•	Time-blocked meetings (from the Daily Note only)
+ATLAS generates a daily ATLAS Focus Plan inside your Obsidian Daily Note.
+
+That plan includes:
+	•	Time-blocked meetings (read from the Daily Note only)
 	•	Automatically computed free time
 	•	Structured execution blocks:
 	•	Deep Work
+	•	Focus Work
 	•	Admin (AM / PM)
 	•	Social Writing (create + engage)
-	•	Focus Work Blocks
 	•	Live task views powered by Obsidian Tasks queries
-	•	Funnel visibility for uncaptured or stale inputs
+	•	Funnel visibility for uncaptured, stale, or unclassified inputs
 
-ATLAS also writes back to source notes, tagging tasks so that:
-	•	Daily focus views stay live
-	•	Slot-level execution is traceable
-	•	No duplicate planning artifacts exist
+ATLAS also writes back to source notes so that:
+	•	Focus views stay live
+	•	Slot-level execution remains traceable
+	•	No duplicate planning artifacts are created
+
+Source notes remain authoritative.
+ATLAS only coordinates execution.
 
 ⸻
 
 Core Features
 
 🧠 Intelligent Task Classification (Optional)
-	•	Uses Ollama with a custom model to classify tasks into:
+
+When enabled, ATLAS can use Ollama with a custom local model to classify tasks into execution-relevant tags:
 	•	#deep
 	•	#focus
 	•	#admin
 	•	#shallow
 	•	#call
 	•	#quickcap
-	•	Classification is idempotent: already-tagged tasks are skipped
+
+Key characteristics:
+	•	Classification is idempotent
+	•	Already-tagged tasks are skipped
 	•	Tags persist in source notes
+	•	AI is optional and local-only
 
-📅 Dynamic Schedule Construction
-	•	Workday defaults to 07:00–18:00
-	•	Lunch is automatically blocked
-	•	Meetings are clamped to the workday
-	•	Free time is inverted into executable slots
-
-🧾 Run Receipts (Optional)
-	•	Each run can emit:
-	•	A human-readable log
-	•	A structured JSON receipt
-	•	Stored under data/logs/
-	•	Ideal for debugging, audits, and future analytics
-
-🧹 Scratchpad Archiving (Optional Tool)
-	•	Completed tasks can be:
-	•	Removed from the Scratchpad
-	•	Backed up to the repo
-	•	Archived into a vault note
-	•	Can be run independently or as part of a workflow
+If AI fails or produces ambiguous output, ATLAS degrades safely.
 
 ⸻
 
-Project Structure (4.0)
+📅 Dynamic Schedule Construction
 
+ATLAS builds a schedule rather than assuming one.
+
+Defaults:
+	•	Workday: 07:00–18:00
+	•	Lunch is automatically blocked
+	•	Meetings are clamped to the workday window
+	•	Free time is inverted into executable slots
+
+This produces a realistic execution surface instead of a wish list.
+
+⸻
+
+🧾 Run Receipts (Optional)
+
+Each run can emit:
+	•	A human-readable execution log
+	•	A structured JSON receipt
+
+Stored under:
+
+data/logs/
+
+Run receipts exist for:
+	•	Debugging
+	•	Auditing
+	•	Future analytics
+	•	Understanding why ATLAS made a specific decision
+
+⸻
+
+### 🧹 Scratchpad Archiving (Optional Tool)
+
+Completed Scratchpad tasks can be:
+- Removed from the Scratchpad
+- Backed up to the repository
+- Appended to a vault archive note
+
+This tool can run independently or as part of a larger workflow.
+
+⸻
+
+## Project Structure (4.0)
+
+```angular2html
 atlas_transform/
 ├── src/
 │   ├── atlas/
 │   │   ├── transform.py        # Core ATLAS engine
-│   │   ├── atlas_paths.py      # Centralized path/config layer
+│   │   ├── atlas_paths.py      # Centralized paths & configuration
 │   │   └── tools/
 │   │       └── archive_completed.py
 │   └── atlas_cli/
@@ -84,9 +133,8 @@ atlas_transform/
 ├── scripts/
 │   └── test_ollama_classifier.sh
 ├── pyproject.toml
-├── README.md
-
-
+└── README.md
+```
 ⸻
 
 Installation
@@ -100,7 +148,7 @@ source .venv/bin/activate
 
 python -m pip install -e .
 
-This installs the atlas CLI into the virtual environment.
+This installs the atlas CLI into the active virtual environment.
 
 ⸻
 
@@ -120,17 +168,20 @@ Dry Run (stdout only)
 
 atlas --stdout ...
 
+Dry runs are useful for debugging transforms without modifying notes.
 
 ⸻
 
 atlas-run Convenience Script
 
-You can wrap ATLAS in a shell script (recommended) for:
+ATLAS is designed to be wrapped.
+
+A small shell script (atlas-run) is recommended for:
 	•	Alfred workflows
 	•	Keyboard shortcuts
 	•	Consistent daily execution
 
-Supports modes:
+Supported modes:
 	•	run (default)
 	•	dry (stdout only)
 
@@ -157,26 +208,35 @@ This will:
 
 Configuration Philosophy
 
-ATLAS 4.0 intentionally keeps paths centralized in atlas_paths.py.
+ATLAS 4.0 intentionally centralizes configuration in atlas_paths.py.
 
-This provides:
-	•	A single source of truth today
-	•	A clean future upgrade path to:
+This is deliberate.
+
+Benefits:
+	•	Single source of truth
+	•	Predictable behavior
+	•	Easier debugging
+
+It also preserves a clean upgrade path to:
 	•	config.yaml
-	•	environment overrides
-	•	multi-vault support
+	•	Environment overrides
+	•	Multi-vault support
 
 Hard-coded paths are acceptable by design at this stage.
 
 ⸻
 
 Design Principles
+
+ATLAS is opinionated. These principles are not accidental.
 	•	Single plan, multiple views
 	•	Source notes are authoritative
 	•	No duplication of task state
 	•	Local-first, AI-optional
 	•	Deterministic output
 	•	Extensible, not clever
+
+If a feature violates these principles, it does not belong in ATLAS.
 
 ⸻
 
@@ -185,7 +245,7 @@ Roadmap (Post-4.0)
 	•	Multi-day planning
 	•	Execution telemetry
 	•	Slot completion tracking
-	•	Optional dashboard export
+	•	Optional dashboard exports
 
 ⸻
 
@@ -193,4 +253,14 @@ Version
 
 ATLAS OS 4.0
 
-This release marks the transition from “script” to personal operating system.
+This release marks the transition from a script to a personal operating system for execution.
+
+⸻
+
+If you want, next we can:
+	•	Add a short “Mental Model” section for new contributors
+	•	Add a “Failure Modes & Guardrails” section (this project actually benefits from it)
+	•	Or write a one-page architectural decision record (ADR) explaining why ATLAS exists at all
+
+But as it stands:
+✅ This README is solid, durable, and future-proof.
