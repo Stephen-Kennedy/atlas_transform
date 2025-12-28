@@ -25,9 +25,13 @@ mkdir -p "$LOG_DIR" "$IMPORTED"
 # (Hazel often has a minimal PATH)
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+# ---- Ollama output normalization (no spinners / no ANSI) ----
+export OLLAMA_NO_PROGRESS=1
+export TERM=dumb
+export NO_COLOR=1
+
 # Make sure the model name matches `ollama list`
-# Change this if you want to drive it from Hazel instead.
-export ATLAS_DT_MODEL="${ATLAS_DT_MODEL:-atlas-task-classifier:latest}"
+export ATLAS_DT_MODEL="${ATLAS_DT_MODEL:-atlas-dt-classifier:latest}"
 
 # -----------------------------
 # macOS-safe lock (mkdir is atomic)

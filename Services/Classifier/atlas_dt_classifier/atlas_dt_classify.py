@@ -43,7 +43,7 @@ TELEMETRY = LOG_DIR / "atlas-decisions.jsonl"
 PROMPT_FILE = PROJECT_ROOT / "Services" / "Classifier" / "atlas-classification-prompt.txt"
 
 # Ollama model name (must match `ollama list`)
-MODEL = os.environ.get("ATLAS_DT_MODEL", "atlas-task-classifier:latest")
+MODEL = os.environ.get("ATLAS_DT_MODEL", "atlas-dt-classifier:latest")
 
 # -----------------------------
 # Canonical schema guardrails
@@ -95,6 +95,34 @@ SUPPORTED_TEXT_EXTS: Set[str] = {".txt", ".md", ".csv", ".log", ".rtf", ".pdf", 
 # Guardrails
 CONF_THRESHOLD = float(os.environ.get("ATLAS_DT_CONF", "0.72"))
 MAX_CHARS = int(os.environ.get("ATLAS_DT_MAXCHARS", "18000"))
+
+def convert_doc_to_docx(path: Path) -> Path:
+    """
+    Convert .doc → .docx using textutil.
+    Returns new Path if converted, otherwise original path.
+    """
+    if path.suffix.lower() != ".doc":
+        return path
+
+    docx_path = path.with_suffix(".docx")
+
+    try:
+        _run([
+            "textutil",
+            "-convert", "docx",
+            "-output", str(docx_path),
+            str(path)
+        ])
+
+        if docx_path.exists():
+            path.unlink()  # remove original .doc
+            return docx_path
+
+    except Exception:
+        # Fall through to review handling later
+        pass
+
+    return path
 
 # -----------------------------
 # Utilities
@@ -390,6 +418,9 @@ def main() -> None:
     if not src.exists() or not src.is_file():
         print("File not found: %s" % src, file=sys.stderr)
         sys.exit(2)
+
+    # ---- Legacy .doc normalization ----
+    src = convert_doc_to_docx(src)
 
     # If we can't extract meaningful text, don't waste a model call.
     if src.suffix.lower() not in SUPPORTED_TEXT_EXTS:

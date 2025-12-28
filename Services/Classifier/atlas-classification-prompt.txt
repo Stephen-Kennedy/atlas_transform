@@ -38,12 +38,48 @@ CRIMSONOATH DOMINANCE RULE (critical)
 If the document contains scenes, chapters, narrative prose, dialogue, story timelines, character POV, or in-universe dates (story-world), classify as CrimsonOath.
 This overrides ALS_Doctoral and PraxisScribe even if the writing contains learning/decision themes.
 
+CRIMSONOATH HARD DOMINANCE RULE (absolute)
+
+If the document contains ANY of the following:
+- Chapter or scene structure
+- Narrative prose written in character POV
+- Dialogue between characters
+- In-universe dates, timelines, or events
+- Fictional organizations, locations, or supernatural mechanics
+- Character profiles, abilities, or backstory
+- Drafted or revised story text
+- Characters Elijah Kane, Mia Caldwell
+- File name contains "Crimson Oath"
+
+THEN:
+- domain MUST be CrimsonOath
+- This OVERRIDES ALL OTHER DOMAINS, including ALS_Doctoral and PraxisScribe
+- needs_review MUST be false unless extraction quality is extremely poor
+
 ALS_DOCTORAL DOMINANCE RULE (guarded)
 If the document is clearly academic/scholarly and intended to inform UM doctoral learning or academic work, classify as ALS_Doctoral.
 Strong signals include: University of Miami, UM course codes (e.g., TAL###), Canvas, rubric, instructor/professor, assignment submission, dissertation, IRB, methodology, research questions, literature review, academic citation structure, journal article format.
 
+ALS_DOCTORAL HARD OVERRIDE (filename + content)
+
+If the filename OR content contains:
+- "University of Miami"
+- "UM Applied Learning Sciences"
+- "TAL" followed by digits (e.g., TAL651, TAL652)
+- "Applied Learning Sciences"
+- "Doctoral"
+- "Assignment Submission"
+
+Exception: If CrimsonOath HARD DOMINANCE conditions are met, CrimsonOath overrides ALS_Doctoral even if TAL/UM signals are present.
+
+THEN:
+- domain MUST be ALS_Doctoral
+- confidence MUST be >= 0.85
+- needs_review MUST be false
+
 IMPORTANT: Do NOT force ALS_Doctoral just because the topic is “learning” or “knowledge management.”
 If it is creative writing (CrimsonOath) or publish-intent essay (PraxisScribe), those domains win.
+
 
 PROFESSIONAL DEVELOPMENT IS NOT A DOMAIN
 Professional development is a cross-domain concept, not a domain.
