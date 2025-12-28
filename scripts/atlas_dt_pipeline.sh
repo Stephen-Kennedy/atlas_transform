@@ -13,6 +13,7 @@ REVIEW="$DATA_ROOT/03_Needs_Review"
 IMPORTED="$DATA_ROOT/04_Imported"
 LOG_DIR="$DATA_ROOT/99_Logs"
 LOG_FILE="$LOG_DIR/atlas-dt-pipeline.log"
+PYTHON="$PROJECT_ROOT/.venv/bin/python"
 
 CLASSIFIER="$PROJECT_ROOT/Services/Classifier/atlas_dt_classifier/atlas_dt_classify.py"
 IMPORTER="$PROJECT_ROOT/Services/Classifier/atlas_dt_classifier/atlas_dt_import_to_devonthink.py"
@@ -76,7 +77,7 @@ do_classify_folder() {
     is_sidecar "$p" && continue
     echo "[$(timestamp)] → Classifying: $(basename "$p")" | tee -a "$LOG_FILE"
 
-    if "$CLASSIFIER" "$p" >>"$LOG_FILE" 2>&1; then
+    if "$PYTHON" "$CLASSIFIER" "$p" >>"$LOG_FILE" 2>&1; then
       echo "[$(timestamp)]   OK" | tee -a "$LOG_FILE"
     else
       rc=$?
@@ -107,7 +108,7 @@ do_classify_file() {
   is_sidecar "$TARGET" && { echo "[$(timestamp)] Skip sidecar: $TARGET" | tee -a "$LOG_FILE"; return 0; }
 
   echo "[$(timestamp)] --- Classify stage (single file) ---" | tee -a "$LOG_FILE"
-  if "$CLASSIFIER" "$TARGET" >>"$LOG_FILE" 2>&1; then
+  if "$PYTHON" "$CLASSIFIER" "$TARGET" >>"$LOG_FILE" 2>&1; then
     echo "[$(timestamp)]   OK" | tee -a "$LOG_FILE"
     return 0
   else

@@ -23,7 +23,6 @@ ALLOWED DOMAINS (choose exactly ONE)
 - ALS_Doctoral
 - CrimsonOath
 - Personal
-- Archive
 
 DOMAIN DEFINITIONS (use as tie-breakers)
 - ABLT: travel agency operations (clients, quotes, bookings, itineraries, supplier comms, marketing content, internal business ops for A Balanced Life Travel).
@@ -33,6 +32,14 @@ DOMAIN DEFINITIONS (use as tie-breakers)
 - CrimsonOath: fiction drafts, worldbuilding, characters, scene/chapter prose, story research for the novel universe.
 - Personal: personal/family/health/finance/legal/household reference, personal purchases, personal planning.
 - Archive: only if long-term value exists but domain ownership is unclear after best effort.
+
+IMPORTANT: ARCHIVE IS NOT A DOMAIN
+
+Do NOT use "Archive" as a domain.
+If classification confidence is low, extraction failed, or context is insufficient:
+- Choose the most likely domain (often Personal or BOCC)
+- Set needs_review = true
+- Explain briefly in reason
 
 CRIMSONOATH DOMINANCE RULE (critical)
 If the document contains scenes, chapters, narrative prose, dialogue, story timelines, character POV, or in-universe dates (story-world), classify as CrimsonOath.

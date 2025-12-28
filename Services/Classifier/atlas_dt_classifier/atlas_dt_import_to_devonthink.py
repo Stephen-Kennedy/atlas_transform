@@ -72,7 +72,6 @@ on run argv
   end repeat
 
   tell application "DEVONthink"
-    activate
 
     set db to current database
     if db is missing value then error "No current database is set in DEVONthink."

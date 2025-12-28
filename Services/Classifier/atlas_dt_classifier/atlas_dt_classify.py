@@ -55,7 +55,6 @@ ALLOWED_DOMAINS: Set[str] = {
     "ALS_Doctoral",
     "CrimsonOath",
     "Personal",
-    "Archive",
 }
 
 ALLOWED_ARTIFACT_TYPES: Set[str] = {
@@ -90,7 +89,7 @@ ALLOWED_ARTIFACT_TYPES: Set[str] = {
 }
 
 # Filetypes we can extract enough signal from to justify a model call
-SUPPORTED_TEXT_EXTS: Set[str] = {".txt", ".md", ".csv", ".log", ".rtf", ".pdf", ".docx"}
+SUPPORTED_TEXT_EXTS: Set[str] = {".txt", ".md", ".csv", ".log", ".rtf", ".pdf", ".docx", ".doc"}
 
 # Guardrails
 CONF_THRESHOLD = float(os.environ.get("ATLAS_DT_CONF", "0.72"))
@@ -188,7 +187,7 @@ def validate_classification(data: Dict, src: Path) -> Tuple[Dict, bool]:
     if domain not in ALLOWED_DOMAINS:
         forced_review = True
         reasons.append("invalid-domain:%s" % (domain or "missing"))
-        data["domain"] = "Archive"
+        data["domain"] = data.get("domain") if data.get("domain") in ALLOWED_DOMAINS else "Personal"
     else:
         data["domain"] = domain
 
@@ -198,6 +197,17 @@ def validate_classification(data: Dict, src: Path) -> Tuple[Dict, bool]:
         arts = []
     arts = [str(a).strip() for a in arts if str(a).strip()]
     arts = arts[:2]
+
+    ARTIFACT_TYPE_ALIASES = {
+        "agreement": "contract",
+        "interlocal-agreement": "contract",
+        "interlocal agreement": "contract",
+        "mou": "contract",
+        "memorandum-of-understanding": "contract",
+        "memorandum of understanding": "contract",
+        "contractual-agreement": "contract",
+    }
+    arts = [ARTIFACT_TYPE_ALIASES.get(a, a) for a in arts]
 
     invalid_arts = [a for a in arts if a not in ALLOWED_ARTIFACT_TYPES]
     if invalid_arts:
@@ -264,23 +274,49 @@ def validate_classification(data: Dict, src: Path) -> Tuple[Dict, bool]:
 
     return data, forced_review
 
+
 PUBLIC_SAFETY_KEYWORDS = [
     "nena", "apco", "psap", "e911", "ng911", "911",
     "rapidsos", "rapiddeploy", "motorola vesta"
 ]
 
+BOCC_KEYWORDS = [
+    "sumter county",
+    "board of county commissioners",
+    "bocc",
+    "certificate of public convenience and necessity",
+    "copcn",
+    "ordinance",
+    "resolution",
+    "county administrator",
+    "clerk of court",
+    "attest:",
+    "issued this",
+    "zendesk",
+    "county attorney",
+    "clerk of court",
+    "clerk to the board",
+]
+
 def apply_keyword_overrides(src: Path, content: str, data: dict) -> dict:
     hay = f"{src.name}\n{content or ''}".lower()
 
-    # If it's clearly a public safety conference / association travel receipt, force BOCC
+    # Hard BOCC/government signals -> force BOCC
+    if any(k in hay for k in BOCC_KEYWORDS):
+        data["domain"] = "BOCC"
+        r = (data.get("reason") or "").strip()
+        prefix = "keyword-override:bocc-government-doc"
+        data["reason"] = (prefix if not r else f"{prefix} | {r}")[:180]
+        return data
+
+    # Existing public safety conference override (keep if you want)
     if any(k in hay for k in PUBLIC_SAFETY_KEYWORDS):
-        # Only override if model tried to put it into ABLT (or is uncertain)
         if data.get("domain") in {"ABLT", "Archive", "Personal", ""}:
             data["domain"] = "BOCC"
-            # Help future debugging
             r = (data.get("reason") or "").strip()
             prefix = "keyword-override:public-safety"
             data["reason"] = (prefix if not r else f"{prefix} | {r}")[:180]
+
     return data
 
 def load_prompt_template() -> str:
@@ -336,33 +372,50 @@ def move_pair(src: Path, sidecar: Path, dst_dir: Path) -> None:
     dst_sidecar = dst_dir / sidecar.name
     shutil.move(str(src), str(dst_file))
     shutil.move(str(sidecar), str(dst_sidecar))
+def _extract_docx_python_docx(path: Path) -> str:
+    try:
+        from docx import Document
+        doc = Document(str(path))
+        parts = []
+        for p in doc.paragraphs:
+            t = (p.text or "").strip()
+            if t:
+                parts.append(t)
+        text = "\n".join(parts).strip()
+        return text if text else f"[DOCX extraction empty] Filename: {path.name}"
+    except Exception as e:
+        return f"[DOCX extraction failed:{type(e).__name__}] Filename: {path.name}"
 
 def extract_text(path: Path) -> str:
     """
     Best-effort text extraction.
+
     - txt/md/csv/log: direct read
     - rtf: textutil
+    - docx: python-docx (reliable)
+    - doc: textutil (best-effort)
     - pdf: pdftotext (if available) else OCR first page (pdftoppm + tesseract)
-    - docx: textutil (best-effort)
-    Falls back to filename if extraction fails.
     """
     ext = path.suffix.lower()
     PDF_PAGE_LIMIT = int(os.environ.get("ATLAS_DT_PDF_PAGES", "3"))
 
-    if ext in [".txt", ".md", ".csv", ".log"]:
+    if ext in {".txt", ".md", ".csv", ".log"}:
         return path.read_text(errors="ignore")
 
     if ext == ".rtf":
         try:
             return _run(["textutil", "-convert", "txt", "-stdout", str(path)])
         except Exception:
-            return "[RTF extraction failed] Filename: %s" % path.name
+            return f"[RTF extraction failed] Filename: {path.name}"
 
     if ext == ".docx":
+        return _extract_docx_python_docx(path)
+
+    if ext == ".doc":
         try:
             return _run(["textutil", "-convert", "txt", "-stdout", str(path)])
         except Exception:
-            return "[DOCX extraction failed] Filename: %s" % path.name
+            return f"[DOC extraction failed] Filename: {path.name}"
 
     if ext == ".pdf":
         # 1) Try text layer (first N pages)
@@ -387,7 +440,7 @@ def extract_text(path: Path) -> str:
             pdftoppm = _which("pdftoppm")
             tesseract = _which("tesseract")
             if not (pdftoppm and tesseract):
-                return "[PDF text extraction unavailable] Filename: %s" % path.name
+                return f"[PDF text extraction unavailable] Filename: {path.name}"
 
             with tempfile.TemporaryDirectory(prefix="atlas_ocr_") as td:
                 td_path = Path(td)
@@ -400,9 +453,9 @@ def extract_text(path: Path) -> str:
         except Exception:
             pass
 
-        return "[PDF text extraction unavailable] Filename: %s" % path.name
+        return f"[PDF text extraction unavailable] Filename: {path.name}"
 
-    return "[Unsupported filetype for text extraction] Filename: %s" % path.name
+    return f"[Unsupported filetype for text extraction] Filename: {path.name}"
 
 # -----------------------------
 # Main
@@ -419,25 +472,34 @@ def main() -> None:
         print("File not found: %s" % src, file=sys.stderr)
         sys.exit(2)
 
-    # ---- Legacy .doc normalization ----
-    src = convert_doc_to_docx(src)
-
     # If we can't extract meaningful text, don't waste a model call.
     if src.suffix.lower() not in SUPPORTED_TEXT_EXTS:
         data = {
-            "domain": "Archive",
-            "artifact_types": ["other"],  # keep schema shape; still review
+            "domain": "Personal",  # or BOCC if filename hints it
+            "artifact_types": ["reference"],
             "concepts": [],
-            "confidence": 0.0,
+            "confidence": 0.5,
             "needs_review": True,
-            "reason": "unsupported-filetype:%s" % src.suffix.lower(),
+            "reason": f"unsupported-filetype:{src.suffix.lower()}",
             "proposed_title": src.stem[:120],
         }
-        sidecar = write_sidecar(src, data)
-        move_pair(src, sidecar, REVIEW)
-        append_telemetry(src, data, "NeedsReview")
-        sys.exit(10)
 
+        # Optional extra tag signal (lets DT rules key off it)
+        data["concepts"] = ["file-triage"]  # must be lowercase/hyphenated if you keep it
+
+        sidecar = write_sidecar(src, data)
+
+        import_unsupported = os.environ.get("ATLAS_DT_IMPORT_UNSUPPORTED", "1") == "1"
+        if import_unsupported:
+            # ✅ Goes to DT (via your importer), but tagged needs-review
+            move_pair(src, sidecar, READY)
+            append_telemetry(src, data, "ReadyForDT_Unsupported")
+            sys.exit(0)  # treat as OK pipeline-wise (it will be reviewed in DT)
+        else:
+            # Old behavior: Finder review
+            move_pair(src, sidecar, REVIEW)
+            append_telemetry(src, data, "NeedsReview_Unsupported")
+            sys.exit(10)
     # Load + fill prompt
     template = load_prompt_template()
     content = extract_text(src)
