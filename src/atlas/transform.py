@@ -252,6 +252,7 @@ def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
     return meetings
 
 
+
 # =========================
 # Extract: tasks + funnel
 # =========================
@@ -819,7 +820,7 @@ def render_slot_section(b: Block, *, title: str, tag: str) -> List[str]:
 def render_work_block_section(start_min: int, end_min: int, *, title: str, tags: List[str], limit: int) -> List[str]:
     """Render a grouped Work Block that pulls tasks from multiple slot tags (no backfill)."""
     lines: List[str] = []
-    lines.append(f"#### {min_to_hhmm(start_min)} - {min_to_hhmm(end_min)}: {title}")
+    lines.append(f"#### {min_to_hhmm(start_min)} - {min_to_hhmm(end_min)}: 🎯{title}")
     lines.append("```tasks")
     if tags:
         conds = [f"(tag includes {t})" for t in tags]
@@ -1821,6 +1822,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if ollama_report.log_path and ollama_report.json_path:
             print(f"  Logs: {ollama_report.log_path} and {ollama_report.json_path}")
 
+    timeblocking_inferred: list[str] = []
+
     # assignments (today + slot tags)
     assignments = build_assignments(
         today=today,
@@ -1840,11 +1843,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     atlas_lines.append(f"## ATLAS Focus Plan ({today.isoformat()})")
     atlas_lines.append("")
     atlas_lines.append("### Time Blocking")
+    atlas_lines.append("🎯 = Focus | 🔥 = Deep | ✍️ = Create | 🧰 = Admin")
     if not meetings:
-        atlas_lines.append("- (no meetings)")
+        atlas_lines.append("- (No scheduled meetings)")
     else:
         for mt in meetings:
             atlas_lines.append(f"- {min_to_hhmm(mt.start_min)} - {min_to_hhmm(mt.end_min)}: {mt.title}")
+    # Placeholder for inferred blocks (we’ll fill this after we build the runway)
+    atlas_lines.append("__ATLAS_INFERRED_TIMEBLOCKS__")
+    atlas_lines.append("")
     atlas_lines.append("")
     atlas_lines.append("### Execution Runway")
     atlas_lines.append("")
@@ -1854,15 +1861,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     def flush_focus_group(group: List[Block]) -> None:
         if not group:
             return
+
         start_min = group[0].start_min
         end_min = group[-1].end_min
-        tags = [slot_tag(today, block_label(b)) for b in group]
         units = len(group)
+        total_mins = end_min - start_min  # typically units * 30
+
+        # ✅ Work Block indicator line (color + icon + meaning)
+        timeblocking_inferred.append(
+            f"- <span style='color:#2E7D32;'>"
+            f"{min_to_hhmm(start_min)} - {min_to_hhmm(end_min)} 🎯 Focus Block "
+            f"({units}×30m, {total_mins} min)"
+            f"</span>"
+        )
+
+        tags = [slot_tag(today, block_label(b)) for b in group]
         atlas_lines.extend(
             render_work_block_section(
                 start_min,
                 end_min,
-                title=f"Work Block ({units})",
+                title=f" Focus Block ({units}×30m)",
                 tags=tags,
                 limit=units,
             )
@@ -1889,15 +1907,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         focus_group = []
 
         if b.kind == "ADMIN_AM":
-            atlas_lines.extend(render_buffer_section(b, "Admin AM (buffer)", "_Email/calls/triage — no assigned tasks._"))
+            timeblocking_inferred.append(
+                f"- <span style='color:#7A7A7A;'> {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} 🧰 Admin AM (buffer)</span>"
+            )
+            atlas_lines.extend(
+                render_buffer_section(b, "Admin AM (buffer)", "_Email/calls/triage — no assigned tasks._"))
+
         elif b.kind == "ADMIN_PM":
-            atlas_lines.extend(render_buffer_section(b, "Admin PM (buffer)", "_Wrap-up/inbox/ops — no assigned tasks._"))
+            timeblocking_inferred.append(
+                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)}<span style='color:#7A7A7A;'> 🧾 Admin PM (buffer)</span>"
+            )
+            atlas_lines.extend(
+                render_buffer_section(b, "Admin PM (buffer)", "_Wrap-up/inbox/ops — no assigned tasks._"))
+
         elif b.kind == "SOCIAL_POST":
-            atlas_lines.extend(render_slot_section(b, title="Writing (Social): Create/Post (30 min)", tag=slot_tag(today, "social-1")))
+            timeblocking_inferred.append(
+                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} <span style='color:#0F766E;'>✍️ Writing (Social): Create/Post (30 min)</span>"
+
+            )
+            atlas_lines.extend(
+                render_slot_section(b, title="Social Create/Post (30 min)", tag=slot_tag(today, "social-1")))
+
         elif b.kind == "SOCIAL_REPLIES":
-            atlas_lines.extend(render_slot_section(b, title="Writing (Social): Engage/Replies (30 min)", tag=slot_tag(today, "social-2")))
+            timeblocking_inferred.append(
+                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} <span style='color:#0F766E;'>💬 Writing (Social): Engage/Replies (30 min)</span>"
+
+            )
+            atlas_lines.extend(render_slot_section(b, title="Social Engage/Replies (30 min)",
+                                                   tag=slot_tag(today, "social-2")))
+
         elif b.kind == "DEEP_WORK":
             mins = b.end_min - b.start_min
+            timeblocking_inferred.append(
+                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} <span style='color:#4B5FD2;'>🔥 Deep Work ({mins} min)</span>"
+            )
             atlas_lines.extend(render_slot_section(b, title=f"Deep Work ({mins} min)", tag=slot_tag(today, "deep")))
 
     flush_focus_group(focus_group)
@@ -1957,6 +2000,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     atlas_lines.append("")
     atlas_lines.append("<!-- ATLAS:END -->")
     atlas_lines.append("")
+
+    # Replace inferred placeholder inside Time Blocking
+    inferred_text = "\n".join(timeblocking_inferred) if timeblocking_inferred else ""
+    atlas_lines = [
+        (inferred_text if ln == "__ATLAS_INFERRED_TIMEBLOCKS__" else ln)
+        for ln in atlas_lines
+    ]
 
     atlas_block = "\n".join(atlas_lines)
 

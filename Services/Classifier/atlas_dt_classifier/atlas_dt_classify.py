@@ -201,11 +201,12 @@ def validate_classification(data: Dict, src: Path) -> Tuple[Dict, bool]:
     ARTIFACT_TYPE_ALIASES = {
         "agreement": "contract",
         "interlocal-agreement": "contract",
-        "interlocal agreement": "contract",
         "mou": "contract",
         "memorandum-of-understanding": "contract",
-        "memorandum of understanding": "contract",
         "contractual-agreement": "contract",
+        "incident-report": "report",
+        "incident-investigation": "report",
+        "root-cause-analysis": "report",
     }
     arts = [ARTIFACT_TYPE_ALIASES.get(a, a) for a in arts]
 
