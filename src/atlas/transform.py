@@ -183,6 +183,8 @@ TIMEBLOCK_SECTION_RE = re.compile(
     r"(?ims)^\s*###\s+Time\s+Blocking\s*$\n(.*?)(?=^\s*###\s+|\Z)"
 )
 
+#todo test of extract timeblocking
+
 
 def extract_meetings_from_daily(daily_text: str) -> List[Meeting]:
     meetings: List[Meeting] = []
@@ -1178,6 +1180,120 @@ SHUTDOWN_TEMPLATE = """### Shutdown
 
 ATLAS_BLOCK_RE = re.compile(r"(?s)<!--\s*ATLAS:START\s*-->.*?<!--\s*ATLAS:END\s*-->", re.MULTILINE)
 
+ATLAS_TB_MANUAL_START = "<!-- ATLAS:TB:MANUAL:START -->"
+ATLAS_TB_MANUAL_END   = "<!-- ATLAS:TB:MANUAL:END -->"
+ATLAS_TB_INFER_START  = "<!-- ATLAS:TB:INFERRED:START -->"
+ATLAS_TB_INFER_END    = "<!-- ATLAS:TB:INFERRED:END -->"
+
+
+# =========================
+# Preserve manual time blocks INSIDE prior ATLAS block
+# =========================
+
+MANUAL_TB_LINE_RE = re.compile(
+    r"""^\s*
+        (?:[-•]\s*)?                         # optional bullet
+        (?:\[\s*[xX\-]?\s*\]\s*)?            # optional tasks checkbox marker
+        (?P<st>(?:\d{1,2}:\d{2}|\d{3,4}))\s*-\s*
+        (?P<en>(?:\d{1,2}:\d{2}|\d{3,4}))
+        \s*:?\s*
+        (?P<title>.+?)\s*$                   # everything after time range
+    """,
+    re.VERBOSE,
+)
+
+def strip_atlas_block(note_text: str) -> str:
+    """Remove ATLAS block so we can search the 'real' daily note sections."""
+    return ATLAS_BLOCK_RE.sub("", note_text)
+
+def get_existing_atlas_block(note_text: str) -> str:
+    m = ATLAS_BLOCK_RE.search(note_text)
+    return m.group(0) if m else ""
+
+def extract_timeblocking_lines_from_atlas(atlas_block: str) -> List[str]:
+    """
+    Pull ONLY *manual* bullet lines under:
+      ### Time Blocking
+    from the prior ATLAS block.
+
+    Manual lines are the bullet lines between:
+      <!-- ATLAS:TB:MANUAL:START -->
+      <!-- ATLAS:TB:MANUAL:END -->
+
+    If markers are not present (older notes), fall back to keeping all bullet-ish lines
+    in the Time Blocking section up to "### Execution Runway".
+    We keep raw lines so you keep your emojis/colors/wording.
+    """
+    if not atlas_block:
+        return []
+
+    # 1) Marker-based manual region (guaranteed separation)
+    m = re.search(
+        r"(?s)" + re.escape(ATLAS_TB_MANUAL_START) + r"(.*?)" + re.escape(ATLAS_TB_MANUAL_END),
+        atlas_block,
+    )
+    if m:
+        body = m.group(1)
+        kept: List[str] = []
+        for ln in body.splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith("-") or s.startswith("•"):
+                kept.append(s)
+        return kept
+
+    # 2) Fallback for older ATLAS blocks (pre-marker era)
+    m2 = re.search(
+        r"(?ims)^\s*###\s+Time\s+Blocking\s*$\n(.*?)(?=^\s*###\s+Execution\s+Runway\s*$|\Z)",
+        atlas_block,
+    )
+    if not m2:
+        return []
+
+    body = m2.group(1)
+    kept: List[str] = []
+    for ln in body.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith("-") or s.startswith("•"):
+            kept.append(s)
+    return kept
+
+def atlas_manual_lines_to_meetings(lines: List[str]) -> Tuple[List[Meeting], List[str]]:
+    meetings: List[Meeting] = []
+    display: List[str] = []
+
+    for ln in lines:
+        # ✅ Keep the original line exactly as written for display
+        display.append(ln)
+
+        # ✅ But strip HTML tags for parsing so styled inferred lines still block time
+        parse_ln = re.sub(r"<[^>]+>", "", ln).strip()
+
+        m = MANUAL_TB_LINE_RE.match(parse_ln)
+        if not m:
+            # non-parseable lines remain display-only (won't block time)
+            continue
+
+        st, en = m.group("st"), m.group("en")
+        title = (m.group("title") or "").strip()
+        try:
+            sm = hhmm_to_min(st)
+            em = hhmm_to_min(en)
+        except ValueError:
+            continue
+
+        if em == sm:
+            em = sm + DEFAULT_APPT_MINUTES
+        if em < sm:
+            sm, em = em, sm
+
+        meetings.append(Meeting(sm, em, title))
+
+    meetings.sort(key=lambda x: (x.start_min, x.end_min, x.title))
+    return meetings, display
 
 def ensure_shutdown_after_atlas(note_text: str) -> str:
     if SHUTDOWN_HEADER in note_text:
@@ -1749,7 +1865,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     scratch_text = read_text(scratchpad_path) if scratchpad_path.exists() else ""
 
     # meetings -> free windows
-    meetings = clamp_meetings_to_day(extract_meetings_from_daily(daily_text))
+    # --- preserve manual time blocks from prior ATLAS (and treat them as busy) ---
+    prior_atlas = get_existing_atlas_block(daily_text)
+    manual_tb_lines = extract_timeblocking_lines_from_atlas(prior_atlas)
+    manual_meetings, manual_tb_display = atlas_manual_lines_to_meetings(manual_tb_lines)
+
+    # --- extract meetings from DAILY NOTE (excluding ATLAS content) ---
+    daily_text_no_atlas = strip_atlas_block(daily_text)
+    meetings_daily = clamp_meetings_to_day(extract_meetings_from_daily(daily_text_no_atlas))
+
+    # Combine for scheduling/busy-time purposes
+    meetings = clamp_meetings_to_day(meetings_daily + manual_meetings)
     busy = build_busy_windows(meetings)
     free = invert_busy_to_free(busy)
 
@@ -1844,13 +1970,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     atlas_lines.append("")
     atlas_lines.append("### Time Blocking")
     atlas_lines.append("🎯 = Focus | 🔥 = Deep | ✍️ = Create | 🧰 = Admin")
-    if not meetings:
-        atlas_lines.append("- (No scheduled meetings)")
+
+    # ✅ Visible, sequential view (manual + meetings + inferred) will be filled at end.
+    atlas_lines.append("__ATLAS_TIMEBLOCKS_SORTED__")
+
+        # 🔒 Hidden internals (manual + inferred timeblocks)
+    # These lines are kept for the next run, but wrapped in Obsidian comments (%% ... %%)
+    # so they don't eat screen real-estate in your Daily Note.
+    atlas_lines.append("#### ATLAS Internals (hidden)")
+    atlas_lines.append("%%")
+
+    # Manual time blocks (persist across runs)
+    atlas_lines.append(ATLAS_TB_MANUAL_START)
+    if manual_tb_display:
+        for ln in manual_tb_display:
+            atlas_lines.append(ln)  # verbatim
     else:
-        for mt in meetings:
-            atlas_lines.append(f"- {min_to_hhmm(mt.start_min)} - {min_to_hhmm(mt.end_min)}: {mt.title}")
-    # Placeholder for inferred blocks (we’ll fill this after we build the runway)
+        atlas_lines.append("- (No manual blocks)")
+    atlas_lines.append(ATLAS_TB_MANUAL_END)
+
+    # Inferred time blocks (regenerated each run; stored for transparency/debug)
+    atlas_lines.append(ATLAS_TB_INFER_START)
     atlas_lines.append("__ATLAS_INFERRED_TIMEBLOCKS__")
+    atlas_lines.append(ATLAS_TB_INFER_END)
+
+    atlas_lines.append("%%")
     atlas_lines.append("")
     atlas_lines.append("")
     atlas_lines.append("### Execution Runway")
@@ -2005,6 +2149,48 @@ def main(argv: Optional[List[str]] = None) -> int:
     inferred_text = "\n".join(timeblocking_inferred) if timeblocking_inferred else ""
     atlas_lines = [
         (inferred_text if ln == "__ATLAS_INFERRED_TIMEBLOCKS__" else ln)
+        for ln in atlas_lines
+    ]
+
+    # Build visible, sequential time blocking list (meetings + manual + inferred)
+    tb_items: List[Tuple[int, str]] = []
+    tb_time_re = re.compile(r"(\d{1,2}:\d{2}|\d{3,4})\s*-\s*(\d{1,2}:\d{2}|\d{3,4})")
+
+    def _tb_start_min(line: str) -> int:
+        s = re.sub(r"<[^>]+>", "", line).strip()
+        m = tb_time_re.search(s)
+        if not m:
+            return 10**9
+        try:
+            return hhmm_to_min(m.group(1))
+        except Exception:
+            return 10**9
+
+    # meetings from daily note
+    for mt in meetings_daily:
+        tb_items.append((
+            mt.start_min,
+            f"- {min_to_hhmm(mt.start_min)} - {min_to_hhmm(mt.end_min)}: {mt.title}",
+        ))
+
+    # manual lines (verbatim)
+    for ln in manual_tb_display:
+        tb_items.append((_tb_start_min(ln), ln))
+
+    # inferred lines (already bullet strings)
+    for ln in timeblocking_inferred:
+        tb_items.append((_tb_start_min(ln), ln))
+
+    tb_items.sort(key=lambda x: x[0])
+    sorted_lines = [ln for _k, ln in tb_items]
+
+    if not sorted_lines:
+        sorted_text = "- (No time blocks)"
+    else:
+        sorted_text = "\n".join(sorted_lines)
+
+    atlas_lines = [
+        (sorted_text if ln == "__ATLAS_TIMEBLOCKS_SORTED__" else ln)
         for ln in atlas_lines
     ]
 
