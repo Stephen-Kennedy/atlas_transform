@@ -168,9 +168,9 @@ class Block:
         return max(0, self.end_min - self.start_min)
 
     def placeholder_count(self) -> int:
-        if self.kind in ("SOCIAL_POST", "SOCIAL_REPLIES"):
-            return 0
         if self.kind == "DEEP_WORK":
+            return 1
+        if self.kind == "WRITING_BLOCK":
             return 1
         return max(1, self.max_tasks)
 
@@ -569,18 +569,11 @@ def place_required_blocks(free_windows: List[FreeWindow]) -> Tuple[List[Block], 
             blocks.append(Block(st, en, kind="ADMIN_AM", max_tasks=0))
             remaining = subtract_interval(remaining, st, en)
 
-    # Social Writing: best-effort 30–60 minutes total, in 30-minute chunks
-    # Place one early if possible, and a second late if possible.
-    slot = choose_slot(remaining, 30, prefer="earliest")
+    # Writing block: 60 minutes consecutive (best-effort)
+    slot = choose_slot(remaining, 60, prefer="earliest")
     if slot:
         st, en = slot
-        blocks.append(Block(st, en, kind="SOCIAL_POST", max_tasks=1))
-        remaining = subtract_interval(remaining, st, en)
-
-    slot = choose_slot(remaining, 30, prefer="latest")
-    if slot:
-        st, en = slot
-        blocks.append(Block(st, en, kind="SOCIAL_REPLIES", max_tasks=1))
+        blocks.append(Block(st, en, kind="WRITING_BLOCK", max_tasks=1))
         remaining = subtract_interval(remaining, st, en)
 
     blocks.sort(key=lambda b: (b.start_min, b.end_min, b.kind))
@@ -907,8 +900,7 @@ def build_assignments(
 
         for t in tasks:
             if is_bocc_task(t):
-                # overdue (>=1) or due today (=0) is urgent
-                if t.overdue_days >= 0:
+                if t.overdue_days >= 0:  # overdue or due today
                     bocc_urgent.append(t)
                 else:
                     bocc_deferred.append(t)
@@ -916,6 +908,10 @@ def build_assignments(
                 non_bocc.append(t)
 
         return bocc_urgent + non_bocc + bocc_deferred
+
+    def has_tag(text: str, tag: str) -> bool:
+        # Match as a real tag token (case-insensitive), not a substring.
+        return bool(re.search(rf"(?i)(?<!\S){re.escape(tag)}\b", text))
 
     # Base ordering preserves your tier logic
     ordered: List[Task] = [*imm, *crit, *std, *stale]
@@ -929,52 +925,70 @@ def build_assignments(
         if is_quickcap(d):
             return False
         # Don't schedule deep work far in the future (keeps runway sensible)
-        if "#deep" in d and t.overdue_days <= -1:
+        if has_tag(d, "#deep") and t.overdue_days <= -1:
             return False
         return True
 
     focus_candidates = [t for t in ordered if eligible_for_focus(t)]
 
-    # Deep work: one task max, prefer #deep, fallback #focus
+    # ------------------------------------------------------------
+    # 1) WRITING BLOCK FIRST (one task, slot tag = /write)
+    # ------------------------------------------------------------
+    write_task: Optional[Task] = None
+    writing_blocks = [b for b in required_blocks if b.kind == "WRITING_BLOCK"]
+    if writing_blocks:
+        # Prefer explicit #write tasks
+        write_task = next((t for t in ordered if has_tag(t.display, "#write")), None)
+
+        # (Optional) If you ever want #writing to work too, uncomment:
+        # if not write_task:
+        #     write_task = next((t for t in ordered if has_tag(t.display, "#writing")), None)
+
+        if write_task:
+            assignments[write_task.display] = [today_tag, date_tag, slot_tag(today, "write")]
+
+    # ------------------------------------------------------------
+    # 2) DEEP WORK SECOND (don’t steal the write_task)
+    # ------------------------------------------------------------
     deep_blocks = [b for b in required_blocks if b.kind == "DEEP_WORK"]
     if deep_blocks:
-        if is_weekend(today):
-            # On weekends, avoid choosing a non-urgent BOCC task for Deep Work
-            deep_task = next(
-                (
-                    t for t in ordered
-                    if "#deep" in t.display
-                    and (not is_bocc_task(t) or t.overdue_days >= 0)
-                ),
-                None
-            )
-            if not deep_task:
-                deep_task = next(
-                    (
-                        t for t in ordered
-                        if "#focus" in t.display
-                        and (not is_bocc_task(t) or t.overdue_days >= 0)
-                    ),
-                    None
-                )
-        else:
-            deep_task = next((t for t in ordered if "#deep" in t.display), None)
-            if not deep_task:
-                deep_task = next((t for t in ordered if "#focus" in t.display), None)
+        def deep_candidate_ok(t: Task) -> bool:
+            if write_task and t.display == write_task.display:
+                return False  # don't steal the writing task
+            if not has_tag(t.display, "#deep"):
+                return False
+            # weekend guard: avoid non-urgent BOCC deep work
+            if is_weekend(today) and is_bocc_task(t) and t.overdue_days < 0:
+                return False
+            return True
+
+        deep_task = next((t for t in ordered if deep_candidate_ok(t)), None)
+
+        if not deep_task:
+            def focus_fallback_ok(t: Task) -> bool:
+                if write_task and t.display == write_task.display:
+                    return False
+                if not has_tag(t.display, "#focus"):
+                    return False
+                if is_weekend(today) and is_bocc_task(t) and t.overdue_days < 0:
+                    return False
+                return True
+
+            deep_task = next((t for t in ordered if focus_fallback_ok(t)), None)
 
         if deep_task:
-            tag = slot_tag(today, "deep")
-            assignments[deep_task.display] = [today_tag, date_tag, tag]
+            assignments[deep_task.display] = [today_tag, date_tag, slot_tag(today, "deep")]
 
-    # Fill focus slots sequentially from candidates
+    # ------------------------------------------------------------
+    # 3) Fill focus slots sequentially from candidates
+    # ------------------------------------------------------------
     used = set(assignments.keys())
     for b in focus_slots:
         t = next((t for t in focus_candidates if t.display not in used), None)
         if not t:
             break
         used.add(t.display)
-        tag = slot_tag(today, block_label(b).replace(":", ""))
-        assignments[t.display] = [today_tag, date_tag, tag]
+        assignments[t.display] = [today_tag, date_tag, slot_tag(today, block_label(b))]
 
     return assignments
 
@@ -2149,21 +2163,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             atlas_lines.extend(
                 render_buffer_section(b, "Admin PM (buffer)", "_Wrap-up/inbox/ops — no assigned tasks._"))
 
-        elif b.kind == "SOCIAL_POST":
+        elif b.kind == "WRITING_BLOCK":
+            mins = b.end_min - b.start_min
             timeblocking_inferred.append(
-                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} <span style='color:#0F766E;'>✍️ Writing (Social): Create/Post (30 min)</span>"
-
+                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} "
+                f"<span style='color:#0F766E;'>✍️ Writing Block ({mins} min)</span>"
             )
             atlas_lines.extend(
-                render_slot_section(b, title="Social Create/Post (30 min)", tag=slot_tag(today, "social-1")))
-
-        elif b.kind == "SOCIAL_REPLIES":
-            timeblocking_inferred.append(
-                f"- {min_to_hhmm(b.start_min)} - {min_to_hhmm(b.end_min)} <span style='color:#0F766E;'>💬 Writing (Social): Engage/Replies (30 min)</span>"
-
+                render_slot_section(
+                    b,
+                    title=f"Writing Block ({mins} min)",
+                    tag=slot_tag(today, "write")
+                )
             )
-            atlas_lines.extend(render_slot_section(b, title="Social Engage/Replies (30 min)",
-                                                   tag=slot_tag(today, "social-2")))
 
         elif b.kind == "DEEP_WORK":
             mins = b.end_min - b.start_min
