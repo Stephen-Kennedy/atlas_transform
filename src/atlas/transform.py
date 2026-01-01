@@ -844,6 +844,35 @@ def render_buffer_section(b: Block, title: str, note: str = "") -> List[str]:
     lines.append("")
     return lines
 
+def is_weekend(d: date) -> bool:
+    return d.weekday() >= 5  # 5=Sat, 6=Sun
+
+
+def is_bocc_task(t: Task) -> bool:
+    # you can expand later (e.g. "#county", "board packet", etc.)
+    return "#bocc" in t.display.lower()
+
+
+def reorder_weekend(tasks: List[Task]) -> List[Task]:
+    """
+    Weekend ordering:
+    - keep overdue/due-today BOCC tasks near the top
+    - push non-urgent BOCC tasks to the bottom
+    """
+    bocc_urgent: List[Task] = []
+    non_bocc: List[Task] = []
+    bocc_deferred: List[Task] = []
+
+    for t in tasks:
+        if is_bocc_task(t):
+            if t.overdue_days >= 0:  # overdue or due today
+                bocc_urgent.append(t)
+            else:
+                bocc_deferred.append(t)
+        else:
+            non_bocc.append(t)
+
+    return bocc_urgent + non_bocc + bocc_deferred
 
 def build_assignments(
         today: date,
@@ -860,28 +889,84 @@ def build_assignments(
     today_tag = FOCUS_TODAY_TAG
     date_tag = FOCUS_DATE_TAG_FMT.format(date=today.isoformat())
 
-    ordered = [*imm, *crit, *std, *stale]
+    def is_weekend(d: date) -> bool:
+        return d.weekday() >= 5  # 5=Sat, 6=Sun
+
+    def is_bocc_task(t: Task) -> bool:
+        return "#bocc" in t.display.lower()
+
+    def reorder_weekend(tasks: List[Task]) -> List[Task]:
+        """
+        Weekend ordering:
+        - Keep urgent BOCC tasks near the top (overdue or due today).
+        - Push non-urgent BOCC tasks to the bottom.
+        """
+        bocc_urgent: List[Task] = []
+        non_bocc: List[Task] = []
+        bocc_deferred: List[Task] = []
+
+        for t in tasks:
+            if is_bocc_task(t):
+                # overdue (>=1) or due today (=0) is urgent
+                if t.overdue_days >= 0:
+                    bocc_urgent.append(t)
+                else:
+                    bocc_deferred.append(t)
+            else:
+                non_bocc.append(t)
+
+        return bocc_urgent + non_bocc + bocc_deferred
+
+    # Base ordering preserves your tier logic
+    ordered: List[Task] = [*imm, *crit, *std, *stale]
+
+    # Weekend behavior: push #bocc lower unless urgent
+    if is_weekend(today):
+        ordered = reorder_weekend(ordered)
 
     def eligible_for_focus(t: Task) -> bool:
         d = t.display
         if is_quickcap(d):
             return False
+        # Don't schedule deep work far in the future (keeps runway sensible)
         if "#deep" in d and t.overdue_days <= -1:
             return False
         return True
 
     focus_candidates = [t for t in ordered if eligible_for_focus(t)]
 
-    # Deep work: one task max, must be #deep
+    # Deep work: one task max, prefer #deep, fallback #focus
     deep_blocks = [b for b in required_blocks if b.kind == "DEEP_WORK"]
     if deep_blocks:
-        deep_task = next((t for t in ordered if "#deep" in t.display), None)
-        if not deep_task:
-            deep_task = next((t for t in ordered if "#focus" in t.display), None)
+        if is_weekend(today):
+            # On weekends, avoid choosing a non-urgent BOCC task for Deep Work
+            deep_task = next(
+                (
+                    t for t in ordered
+                    if "#deep" in t.display
+                    and (not is_bocc_task(t) or t.overdue_days >= 0)
+                ),
+                None
+            )
+            if not deep_task:
+                deep_task = next(
+                    (
+                        t for t in ordered
+                        if "#focus" in t.display
+                        and (not is_bocc_task(t) or t.overdue_days >= 0)
+                    ),
+                    None
+                )
+        else:
+            deep_task = next((t for t in ordered if "#deep" in t.display), None)
+            if not deep_task:
+                deep_task = next((t for t in ordered if "#focus" in t.display), None)
+
         if deep_task:
             tag = slot_tag(today, "deep")
             assignments[deep_task.display] = [today_tag, date_tag, tag]
 
+    # Fill focus slots sequentially from candidates
     used = set(assignments.keys())
     for b in focus_slots:
         t = next((t for t in focus_candidates if t.display not in used), None)
