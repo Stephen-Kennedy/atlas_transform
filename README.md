@@ -1,14 +1,3 @@
-This is a strong foundation already. What I’ve done below is not a rewrite for marketing, but a clarification and tightening for longevity:
-	•	Keeps your voice: calm, intentional, systems-first
-	•	Makes architectural intent explicit (the why, not just the what)
-	•	Reduces ambiguity for future contributors
-	•	Aligns language with what this actually is: execution infrastructure, not a productivity toy
-	•	Adds light guardrails so future-you doesn’t “optimize” it into something it was never meant to be
-
-Below is a drop-in replacement README.md.
-
-⸻
-
 ATLAS OS 4.0
 
 ATLAS OS is a command-line–driven personal operating system for intentional daily execution.
@@ -254,13 +243,3 @@ Version
 ATLAS OS 4.0
 
 This release marks the transition from a script to a personal operating system for execution.
-
-⸻
-
-If you want, next we can:
-	•	Add a short “Mental Model” section for new contributors
-	•	Add a “Failure Modes & Guardrails” section (this project actually benefits from it)
-	•	Or write a one-page architectural decision record (ADR) explaining why ATLAS exists at all
-
-But as it stands:
-✅ This README is solid, durable, and future-proof.

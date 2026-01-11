@@ -1262,16 +1262,16 @@ SHUTDOWN_TEMPLATE = """### Shutdown
 - 
 
 **🧹 Close the loops:**
-- [ ] Inbox zero-ish (email + messages): triage, defer, delegate
-- [ ] Update task statuses (check off / reschedule / add due dates)
-- [ ] Capture new inputs → Funnel (#quickcap)
+- Inbox zero-ish (email + messages): triage, defer, delegate
+- Update task statuses (check off / reschedule / add due dates)
+-  Capture new inputs → Funnel (#quickcap)
 
 **🧠 Tomorrow’s first move:**
-- [ ] Identify the ONE Deep Work task for tomorrow (must have #deep)
-- [ ] If blocked: write the next physical action + who/what is needed
+- Identify the ONE Deep Work task for tomorrow (must have #deep)
+- If blocked: write the next physical action + who/what is needed
 
 **⏱️ Meetings sanity check:**
-- [ ] Any meetings that ran long / were missing? Note adjustments.
+- Any meetings that ran long / were missing? Note adjustments.
 
 **🧾 End-of-day note:**
 - 
